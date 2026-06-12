@@ -124,7 +124,6 @@ def _hist_sol():
                  f'<td>{qtd_br(m["quantidade_informada"])} {un_lbl}</td>'
                  f'<td>{esc(m.get("setor_solicitante","—"))}</td>'
                  f'<td>{esc(m.get("nome_solicitante","—"))}</td>'
-                 f'<td>{esc(m.get("motivo","—"))}</td>'
                  f'<td>{esc(aut)}</td><td>{b}</td></tr>')
     st.markdown(f'<table class="tbl"><thead><tr><th>Data</th><th>Produto</th><th>Qtd</th><th>Setor</th><th>Solicitante</th><th>Aprovador</th><th>Status</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
