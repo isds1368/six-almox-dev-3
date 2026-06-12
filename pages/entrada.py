@@ -98,7 +98,7 @@ def _nova_entrada():
                 up_n  = _u("Unidade primária (controle)", val="CX", key="upn")
                 us_n  = _u("Unidade secundária (consumo)", val="UN", key="usn")
             with c2:
-                fat_n = st.number_input("Fator (1 primária = ? secundárias)", value=1.0, min_value=0.001, step=1.0)
+                fat_n = st.number_input("Fator de Conversão (1 primária = ? secundárias)", value=1.0, min_value=0.001, step=1.0)
                 em_n  = st.number_input("Estoque mínimo (unidade primária)", value=0.0, min_value=0.0)
                 ean_n = st.text_input("EAN ou Código SFC (Opcional)",
                                        value=st.session_state.get("en",""),
