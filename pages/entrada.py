@@ -100,7 +100,7 @@ def _nova_entrada():
             with c2:
                 fat_n = st.number_input("Fator (1 primária = ? secundárias)", value=1.0, min_value=0.001, step=1.0)
                 em_n  = st.number_input("Estoque mínimo (unidade primária)", value=0.0, min_value=0.0)
-                ean_n = st.text_input("EAN / Código de barras (opcional)",
+                ean_n = st.text_input("EAN ou Código SFC (Opcional)",
                                        value=st.session_state.get("en",""),
                                        placeholder="Deixe em branco se não tiver")
             desc_n = st.text_area("Descrição (opcional)", height=60)
