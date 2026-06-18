@@ -141,7 +141,7 @@ def _ajuste():
     with c1:
         st.markdown(f'<div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:7px;padding:.7rem;margin-bottom:.5rem;"><div style="font-size:.65rem;color:var(--t3);">ATUAL</div><div style="font-size:1.4rem;font-weight:700;">{qtd_br(est)} {us_lbl}</div><div style="font-size:.72rem;color:var(--t3);">= {qtd_br(est/fat if fat else 0)} {up_lbl}</div></div>',unsafe_allow_html=True)
         # key por produto -> reseta valor automaticamente ao trocar de item
-        nova=st.number_input(f"Nova qtd ({us_lbl}) *",min_value=0.0,value=est,step=1.0,key=f"ajuste_nova_{prod['id']}")
+        nova=st.number_input(f"Quantidade atual (Ajuste acrescentando ou diminuindo o valor de acordo com o que há no estoque físico) ({us_lbl}) *",min_value=0.0,value=est,step=1.0,key=f"ajuste_nova_{prod['id']}")
     with c2:
         motivo=st.text_area("Motivo *",height=100,key=f"ajuste_motivo_{prod['id']}")
 
