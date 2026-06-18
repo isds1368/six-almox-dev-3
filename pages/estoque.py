@@ -114,24 +114,48 @@ def _ajuste():
     if not prods: st.info("Nenhum produto."); return
     pm={f"{p['nome']} ({p['codigo_interno']})":p for p in prods}
     st.markdown('<div class="card"><div class="card-h">⚙️ Ajuste Manual</div>',unsafe_allow_html=True)
+
+    # Tela de confirmação pós-ajuste
+    if st.session_state.get("ajuste_sucesso"):
+        info=st.session_state["ajuste_sucesso"]
+        st.success("✅ Ajuste realizado com sucesso!")
+        st.markdown(f'<div style="font-size:.85rem;color:var(--t3);">Estoque de **{info["nome"]}** definido para <strong>{qtd_br(info["nova"])} {info["unidade"]}</strong>.</div>',unsafe_allow_html=True)
+        if st.button("➕ Sugerir novo ajuste",type="primary",use_container_width=True):
+            # limpa o estado do produto ajustado para os campos voltarem ao padrão
+            st.session_state.pop(f"ajuste_nova_{info['prod_id']}",None)
+            st.session_state.pop(f"ajuste_motivo_{info['prod_id']}",None)
+            del st.session_state["ajuste_sucesso"]
+            st.rerun()
+        st.markdown("</div>",unsafe_allow_html=True)
+        return
+
     st.warning("⚠️ Sobrescreve o estoque. Use apenas para correções de inventário.")
-    with st.form("faj"):
-        sel=st.selectbox("Produto *",list(pm.keys())); prod=pm[sel]
-        est=float(prod["quantidade_total_secundaria"]); fat=float(prod["fator_conversao"])
-        us_lbl=sigla_para_opcao(prod["unidade_secundaria"]); up_lbl=sigla_para_opcao(prod["unidade_primaria"])
-        c1,c2=st.columns(2)
-        with c1:
-            st.markdown(f'<div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:7px;padding:.7rem;margin-bottom:.5rem;"><div style="font-size:.65rem;color:var(--t3);">ATUAL</div><div style="font-size:1.4rem;font-weight:700;">{qtd_br(est)} {us_lbl}</div><div style="font-size:.72rem;color:var(--t3);">= {qtd_br(est/fat if fat else 0)} {up_lbl}</div></div>',unsafe_allow_html=True)
-            nova=st.number_input(f"Nova qtd ({us_lbl}) *",min_value=0.0,value=est,step=1.0)
-        with c2: motivo=st.text_area("Motivo *",height=100)
-        diff=nova-est; cor="var(--ok)" if diff>=0 else "var(--err)"
-        st.markdown(f'<div style="font-size:.78rem;color:var(--t3);padding:.2rem 0;">Variação: <strong style="color:{cor};">{("+" if diff>=0 else "")}{qtd_br(diff)} {us_lbl}</strong></div>',unsafe_allow_html=True)
-        if st.form_submit_button("Aplicar ↓",type="primary",use_container_width=True):
-            if not motivo.strip(): st.error("Motivo obrigatório.")
-            else:
-                da=abs(diff); tm="entrada" if diff>=0 else "saida"
-                registrar_movimentacao({"produto_id":prod["id"],"tipo":tm,"tipo_entrada":"Ajuste Manual","status":"concluido","quantidade_informada":da,"unidade_informada":prod["unidade_secundaria"],"quantidade_convertida":da,"observacao":f"[AJUSTE] {motivo.strip()}","usuario_executor":u["id"]})
-                st.success(f"✅ Estoque ajustado para **{qtd_br(nova)} {us_lbl}**"); st.rerun()
+
+    # Selectbox fora do form -> troca de produto atualiza tudo na hora
+    sel=st.selectbox("Produto *",list(pm.keys()),key="ajuste_sel_produto")
+    prod=pm[sel]
+    est=float(prod["quantidade_total_secundaria"]); fat=float(prod["fator_conversao"])
+    us_lbl=sigla_para_opcao(prod["unidade_secundaria"]); up_lbl=sigla_para_opcao(prod["unidade_primaria"])
+
+    c1,c2=st.columns(2)
+    with c1:
+        st.markdown(f'<div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:7px;padding:.7rem;margin-bottom:.5rem;"><div style="font-size:.65rem;color:var(--t3);">ATUAL</div><div style="font-size:1.4rem;font-weight:700;">{qtd_br(est)} {us_lbl}</div><div style="font-size:.72rem;color:var(--t3);">= {qtd_br(est/fat if fat else 0)} {up_lbl}</div></div>',unsafe_allow_html=True)
+        # key por produto -> reseta valor automaticamente ao trocar de item
+        nova=st.number_input(f"Nova qtd ({us_lbl}) *",min_value=0.0,value=est,step=1.0,key=f"ajuste_nova_{prod['id']}")
+    with c2:
+        motivo=st.text_area("Motivo *",height=100,key=f"ajuste_motivo_{prod['id']}")
+
+    diff=nova-est; cor="var(--ok)" if diff>=0 else "var(--err)"
+    st.markdown(f'<div style="font-size:.78rem;color:var(--t3);padding:.2rem 0;">Variação: <strong style="color:{cor};">{("+" if diff>=0 else "")}{qtd_br(diff)} {us_lbl}</strong></div>',unsafe_allow_html=True)
+
+    if st.button("Aplicar ↓",type="primary",use_container_width=True):
+        if not motivo.strip():
+            st.error("Motivo obrigatório.")
+        else:
+            da=abs(diff); tm="entrada" if diff>=0 else "saida"
+            registrar_movimentacao({"produto_id":prod["id"],"tipo":tm,"tipo_entrada":"Ajuste Manual","status":"concluido","quantidade_informada":da,"unidade_informada":prod["unidade_secundaria"],"quantidade_convertida":da,"observacao":f"[AJUSTE] {motivo.strip()}","usuario_executor":u["id"]})
+            st.session_state["ajuste_sucesso"]={"prod_id":prod["id"],"nome":prod["nome"],"nova":nova,"unidade":us_lbl}
+            st.rerun()
     st.markdown("</div>",unsafe_allow_html=True)
 
 def _editar():
