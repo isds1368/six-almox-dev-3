@@ -52,10 +52,10 @@ def _nova_entrada():
     # Busca
     st.markdown('<div class="card"><div class="card-h">🔍 Identificar Produto</div>', unsafe_allow_html=True)
     c1, c2, c3 = st.columns([3,1,1])
-    with c1: termo = st.text_input("EAN ou nome", placeholder="Bipe ou digite", key="eb")
+    with c1: termo = st.text_input("Codigo do produto ou nome", placeholder="Bipe ou digite", key="eb")
     with c2:
         st.markdown("<div style='height:27px'></div>", unsafe_allow_html=True)
-        be = st.button("Buscar EAN", use_container_width=True)
+        be = st.button("Buscar EAN ou código", use_container_width=True)
     with c3:
         st.markdown("<div style='height:27px'></div>", unsafe_allow_html=True)
         bn = st.button("Buscar Nome", use_container_width=True)
@@ -67,7 +67,7 @@ def _nova_entrada():
             st.session_state["ps"] = p; st.session_state.pop("en", None); prod = p
             st.success(f"✅ {p['nome']} — {p['codigo_interno']}")
         else:
-            st.warning("EAN não encontrado. Cadastre o produto abaixo.")
+            st.warning("Código não encontrado. Cadastre o produto abaixo.")
             st.session_state.pop("ps", None); st.session_state["en"] = termo.strip()
 
     if bn and termo.strip():
