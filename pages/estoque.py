@@ -94,7 +94,7 @@ def _editar():
         with c2:
             fe=st.number_input("Fator",value=float(p["fator_conversao"]),min_value=0.001)
             eme=st.number_input("Est. mín (prim)",value=float(p["estoque_minimo_primario"]),min_value=0.0)
-            eane=st.text_input("EAN",value=p.get("ean") or "")
+            eane=st.text_input("CÓDIGO DO PRODUTO",value=p.get("ean") or "")
             ate=st.checkbox("Ativo",value=p.get("ativo",True))
         de=st.text_area("Descrição",value=p.get("descricao") or "")
         if st.form_submit_button("Salvar →",type="primary"):
