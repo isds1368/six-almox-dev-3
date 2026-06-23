@@ -326,7 +326,7 @@ def _reabastecimento():
     with st.form("freab"):
         c1, c2 = st.columns(2)
         with c1:
-            qtd = st.number_input("Quantidade (Informe o volume que você está recebendo, ex.: Caixa, Pacote...", min_value=0.001, value=1.0, step=1.0)
+            qtd = st.number_input("Quantidade (Informe o volume que você está recebendo, ex.: Caixa, Pacote...)", min_value=0.001, value=1.0, step=1.0)
             ui  = _u("Unidade informada", val=up, key="ui_reab")
         with c2:
             nfn  = st.text_input("Número NF" + (" *" if te=="Nota Fiscal" else " (opcional)"),
