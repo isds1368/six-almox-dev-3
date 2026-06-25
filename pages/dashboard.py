@@ -3,7 +3,7 @@ import io
 import datetime
 import plotly.graph_objects as go
 import streamlit as st
-from utils.database import stats_dashboard, consumo_por_periodo, listar_setores
+from utils.database import stats_dashboard, consumo_por_periodo, listar_setores, listar_movimentacoes
 from utils.ui import badge, kpi_html, status_estoque
 from utils.fmt import qtd_br, datahora_br, data_br
 
@@ -42,8 +42,21 @@ def tela_dashboard():
     """, unsafe_allow_html=True)
 
     # ── Alertas ───────────────────────────────────────────────────
-    if s["criticos"]:
-        st.error(f"🔴 **{s['criticos']} produto(s) com estoque zerado.**")
+    if s["criticos"] or s["baixos"]:
+        total_atencao = s["criticos"] + s["baixos"]
+        partes = []
+        if s["criticos"]: partes.append(f"<strong>{s['criticos']} zerado(s)</strong>")
+        if s["baixos"]:   partes.append(f"<strong>{s['baixos']} abaixo do mínimo</strong>")
+        st.markdown(
+            f'<div style="background:rgba(220,38,38,.1);border:1.5px solid var(--err);border-radius:8px;'
+            f'padding:.85rem 1.1rem;margin:.5rem 0 1rem;display:flex;align-items:center;gap:.75rem;">'
+            f'<span style="font-size:1.4rem;">⚠️</span>'
+            f'<div><div style="font-weight:700;color:var(--err);font-size:.92rem;">'
+            f'{total_atencao} produto(s) precisam de atenção</div>'
+            f'<div style="font-size:.8rem;color:var(--t3);margin-top:.15rem;">{" · ".join(partes)}'
+            f' — verifique a lista abaixo.</div></div></div>',
+            unsafe_allow_html=True,
+        )
     if s["pend_solicitacoes"]:
         st.warning(f"🟡 **{s['pend_solicitacoes']} solicitação(ões)** aguardando aprovação.")
     if s["pend_notas"]:
@@ -119,41 +132,68 @@ def _pie(s):
 
 
 def _recentes(r):
+    from utils.fmt import sigla_para_opcao  # importação segura se existir
     st.markdown(
         '<div class="card"><div class="card-h">🔄 Movimentações Recentes</div>',
         unsafe_allow_html=True,
     )
-    if not r:
-        st.markdown('<p style="color:var(--t3);font-size:.82rem;">Nenhuma.</p>',
-                    unsafe_allow_html=True)
+    hoje      = datetime.date.today()
+    ini_pad   = hoje - datetime.timedelta(days=30)
+    ca, cb    = st.columns(2)
+    with ca: d_ini = st.date_input("De",  value=ini_pad, key="rec_ini")
+    with cb: d_fim = st.date_input("Até", value=hoje,    key="rec_fim")
+
+    # Busca movimentações; tenta filtrar por data se o banco suportar, senão filtra em Python
+    try:
+        movs = listar_movimentacoes(
+            limite=500,
+            data_inicio=d_ini.strftime("%Y-%m-%d"),
+            data_fim=d_fim.strftime("%Y-%m-%d"),
+        )
+    except TypeError:
+        # fallback: função não aceita parâmetros de data — filtra em Python
+        movs = listar_movimentacoes(limite=500)
+        movs = [
+            m for m in movs
+            if d_ini.strftime("%Y-%m-%d") <= (m.get("criado_em") or "")[:10] <= d_fim.strftime("%Y-%m-%d")
+        ]
+
+    if d_ini > d_fim:
+        st.warning("Data início deve ser anterior à data fim.")
+    elif not movs:
+        st.markdown(
+            '<p style="color:var(--t3);font-size:.82rem;">Nenhuma movimentação no período.</p>',
+            unsafe_allow_html=True,
+        )
     else:
         rows = ""
-        for m in r:
+        for m in movs:
             prod  = (m.get("produtos") or {}).get("nome","—")
             cor   = "var(--ok)" if m["tipo"] == "entrada" else "var(--err)"
             sinal = "+" if m["tipo"] == "entrada" else "-"
+            tipo_lbl = "📥" if m["tipo"] == "entrada" else "📤"
             rows += (
                 f'<tr>'
-                f'<td style="color:var(--t3);font-size:.73rem;">{datahora_br(m["criado_em"])}</td>'
+                f'<td style="color:var(--t3);font-size:.73rem;white-space:nowrap;">{datahora_br(m["criado_em"])}</td>'
                 f'<td>{prod[:28]}{"…" if len(prod)>28 else ""}</td>'
                 f'<td style="color:{cor};font-weight:700;font-family:var(--mono);">'
-                f'{sinal}{qtd_br(m["quantidade_informada"])} {m["unidade_informada"]}</td>'
+                f'{tipo_lbl} {sinal}{qtd_br(m["quantidade_informada"])} {m["unidade_informada"]}</td>'
                 f'</tr>'
             )
+        # Altura fixa para 10 linhas (~38px cada) — rola se houver mais
         st.markdown(
+            f'<div style="max-height:390px;overflow-y:auto;border-radius:5px;">'
             f'<table class="tbl"><thead><tr>'
-            f'<th>Data</th><th>Produto</th><th>Qtd</th>'
-            f'</tr></thead><tbody>{rows}</tbody></table>',
+            f'<th>Data/Hora</th><th>Produto</th><th>Movimentação</th>'
+            f'</tr></thead><tbody>{rows}</tbody></table></div>'
+            f'<div style="font-size:.72rem;color:var(--t3);margin-top:.4rem;">'
+            f'{len(movs)} registro(s) no período</div>',
             unsafe_allow_html=True,
         )
     st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _atencao(produtos):
-    st.markdown(
-        '<div class="card"><div class="card-h">🚨 Produtos em Atenção</div>',
-        unsafe_allow_html=True,
-    )
     at = [
         (p, *status_estoque(
             float(p["quantidade_total_secundaria"]),
@@ -162,24 +202,53 @@ def _atencao(produtos):
         ))
         for p in produtos
     ]
+    # Exibe APENAS itens fora do normal — ao voltar ao estoque OK saem automaticamente
     at = [x for x in at if x[2] != "ok"]
-    if not at:
-        st.markdown('<p style="color:var(--ok);font-size:.82rem;">✅ Todos OK.</p>',
-                    unsafe_allow_html=True)
+    at_sorted = sorted(at, key=lambda x: float(x[0]["quantidade_total_secundaria"]))
+
+    criticos_n = sum(1 for _, _, cls in at_sorted if cls == "err")
+    baixos_n   = sum(1 for _, _, cls in at_sorted if cls == "warn")
+
+    st.markdown(
+        '<div class="card"><div class="card-h">🚨 Produtos em Atenção</div>',
+        unsafe_allow_html=True,
+    )
+
+    if not at_sorted:
+        st.markdown(
+            '<p style="color:var(--ok);font-size:.87rem;padding:.3rem 0;">✅ Todos os produtos estão com estoque OK.</p>',
+            unsafe_allow_html=True,
+        )
     else:
+        # Mini-resumo dentro do card
+        resumo_partes = []
+        if criticos_n: resumo_partes.append(f'<span style="color:var(--err);font-weight:700;">{criticos_n} zerado(s)</span>')
+        if baixos_n:   resumo_partes.append(f'<span style="color:var(--warn);font-weight:700;">{baixos_n} baixo(s)</span>')
+        st.markdown(
+            f'<div style="font-size:.78rem;color:var(--t3);margin-bottom:.5rem;">'
+            f'{" · ".join(resumo_partes)} — role para ver todos</div>',
+            unsafe_allow_html=True,
+        )
         rows = ""
-        for p, txt, cls in sorted(at, key=lambda x: float(x[0]["quantidade_total_secundaria"]))[:8]:
+        for p, txt, cls in at_sorted:
+            nome = p["nome"]
+            est  = float(p["quantidade_total_secundaria"])
+            un   = p.get("unidade_secundaria","")
             rows += (
                 f'<tr>'
-                f'<td>{p["nome"][:28]}{"…" if len(p["nome"])>28 else ""}</td>'
-                f'<td class="mono">{qtd_br(p["quantidade_total_secundaria"])} {p["unidade_secundaria"]}</td>'
+                f'<td>{nome[:28]}{"…" if len(nome)>28 else ""}</td>'
+                f'<td class="mono">{qtd_br(est)} {un}</td>'
                 f'<td>{badge(txt,cls)}</td>'
                 f'</tr>'
             )
+        # max-height para 10 linhas (~38px) com scroll
         st.markdown(
+            f'<div style="max-height:390px;overflow-y:auto;border-radius:5px;">'
             f'<table class="tbl"><thead><tr>'
             f'<th>Produto</th><th>Estoque</th><th>Status</th>'
-            f'</tr></thead><tbody>{rows}</tbody></table>',
+            f'</tr></thead><tbody>{rows}</tbody></table></div>'
+            f'<div style="font-size:.72rem;color:var(--t3);margin-top:.4rem;">'
+            f'{len(at_sorted)} produto(s) em atenção</div>',
             unsafe_allow_html=True,
         )
     st.markdown("</div>", unsafe_allow_html=True)
