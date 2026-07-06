@@ -4,8 +4,18 @@ from utils.database import (
     listar_produtos, listar_setores, registrar_movimentacao,
     listar_solicitacoes, atualizar_movimentacao, listar_notificacoes_usuario,
     estoque_disponivel, criar_solicitacao_compra, listar_solicitacoes_compra,
-    atualizar_solicitacao_compra, listar_solicitacoes_unificadas, get_sb,
+    atualizar_solicitacao_compra, get_sb,
 )
+
+def _listar_unificadas(status=None) -> list:
+    """Une almoxarifado + compras numa lista ordenada por data. Autossuficiente."""
+    alm  = listar_solicitacoes(status)
+    comp = listar_solicitacoes_compra(status)
+    for s in alm:  s["origem"] = "almox"
+    for s in comp: s["origem"] = "compra"
+    itens = alm + comp
+    itens.sort(key=lambda x: x.get("criado_em") or "", reverse=True)
+    return itens
 from utils.auth import sessao
 from utils.ui import badge
 from utils.fmt import datahora_br, qtd_br, agora_iso
@@ -682,9 +692,13 @@ def _popup_confirmacao(u):
                 if acao == "rejeitar":
                     dados["motivo_rejeicao"] = motivo_rej.strip()
 
-                sb = get_sb()
-                resp = sb.table("solicitacoes_compra").update(dados).eq("id", conf["id"]).execute()
-                ok = bool(resp and resp.data)
+                try:
+                    sb = get_sb()
+                    resp = sb.table("solicitacoes_compra").update(dados).eq("id", conf["id"]).execute()
+                    ok = bool(resp and resp.data)
+                except Exception:
+                    ok = False
+                    st.error("❌ Erro ao atualizar solicitação de compra. Contate o administrador.")
             else:
                 dados = {
                     "status":              "aprovado" if acao == "aprovar" else "rejeitado",
