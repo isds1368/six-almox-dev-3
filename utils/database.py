@@ -1,438 +1,782 @@
-"""utils/database.py — Seguro: erros internos nunca expostos ao usuário"""
-import os, logging, streamlit as st
-from supabase import create_client, Client
-from dotenv import load_dotenv
-load_dotenv()
-
-# Logger interno — não aparece na UI
-_log = logging.getLogger("sfc.database")
-
-def _err_generico():
-    """Mensagem de erro genérica sem vazar detalhes internos."""
-    st.error("❌ Erro ao acessar o banco de dados. Tente novamente ou contate o administrador.")
-
-@st.cache_resource(show_spinner=False)
-def get_sb() -> Client:
-    url = os.getenv("SUPABASE_URL") or st.secrets.get("SUPABASE_URL","")
-    key = os.getenv("SUPABASE_SERVICE_KEY") or st.secrets.get("SUPABASE_SERVICE_KEY","")
-    if not url or not key:
-        # Não revela os nomes das variáveis ao usuário
-        st.error("❌ Configuração de banco de dados ausente. Contate o administrador.")
-        st.stop()
-    return create_client(url, key)
-
-def _m(q):
-    try: return q.maybe_single().execute().data
-    except Exception as e:
-        _log.error("_m query error: %s", e)
-        return None
-
-# ── USUÁRIOS ─────────────────────────────────────────────────────
-def contar_usuarios() -> int:
-    try: return get_sb().table("usuarios").select("id",count="exact").execute().count or 0
-    except Exception as e:
-        _log.error("contar_usuarios: %s", e)
-        return 0
-
-def buscar_por_nick(nick: str):
-    try: return _m(get_sb().table("usuarios").select("*").eq("nick",nick.strip().lower()))
-    except Exception as e:
-        _log.error("buscar_por_nick: %s", e)
-        return None
-
-def criar_usuario(dados: dict) -> dict:
-    try:
-        return get_sb().table("usuarios").insert(dados).execute().data[0]
-    except Exception as e:
-        err = str(e)
-        _log.error("criar_usuario: %s", e)
-        if "42501" in err or "row-level" in err:
-            st.error("❌ Permissão negada. Contate o administrador.")
-        elif "42P01" in err or "does not exist" in err:
-            st.error("❌ Configuração do banco incompleta. Execute o schema.sql.")
-        elif "23505" in err or "unique" in err.lower():
-            st.error("❌ Este nick já está em uso. Escolha outro.")
-        else:
-            st.error("❌ Não foi possível criar o usuário. Tente novamente.")
-        st.stop()
-
-def listar_usuarios() -> list:
-    try: return get_sb().table("usuarios").select("*").order("nick").execute().data or []
-    except Exception as e:
-        _log.error("listar_usuarios: %s", e)
-        return []
-
-def atualizar_usuario(uid: str, dados: dict):
-    try: get_sb().table("usuarios").update(dados).eq("id",uid).execute()
-    except Exception as e:
-        _log.error("atualizar_usuario: %s", e)
-        st.error("❌ Não foi possível atualizar o usuário.")
-
-def excluir_usuario(uid: str):
-    try: get_sb().table("usuarios").delete().eq("id",uid).execute()
-    except Exception as e:
-        _log.error("excluir_usuario: %s", e)
-        st.error("❌ Não foi possível excluir o usuário.")
-
-# ── CATEGORIAS ───────────────────────────────────────────────────
-def listar_categorias() -> list:
-    try: return get_sb().table("categorias").select("*").order("nome").execute().data or []
-    except Exception as e:
-        _log.error("listar_categorias: %s", e)
-        return []
-
-def criar_categoria(nome, desc=""):
-    try: return get_sb().table("categorias").insert({"nome":nome,"descricao":desc}).execute().data[0]
-    except Exception as e:
-        _log.error("criar_categoria: %s", e)
-        st.error("❌ Erro ao criar categoria."); return None
-
-# ── SETORES ──────────────────────────────────────────────────────
-def listar_setores(apenas_ativos=True) -> list:
-    try:
-        q = get_sb().table("setores").select("*").order("nome")
-        if apenas_ativos: q = q.eq("ativo",True)
-        return q.execute().data or []
-    except Exception as e:
-        _log.error("listar_setores: %s", e)
-        return []
-
-def criar_setor(nome):
-    try: return get_sb().table("setores").insert({"nome":nome}).execute().data[0]
-    except Exception as e:
-        _log.error("criar_setor: %s", e)
-        st.error("❌ Erro ao criar setor."); return None
-
-def atualizar_setor(sid, dados):
-    try: get_sb().table("setores").update(dados).eq("id",sid).execute()
-    except Exception as e:
-        _log.error("atualizar_setor: %s", e)
-
-# ── PRODUTOS ─────────────────────────────────────────────────────
-def listar_produtos(apenas_ativos=True) -> list:
-    try:
-        q = get_sb().table("produtos").select("*,categorias(nome)").order("nome")
-        if apenas_ativos: q = q.eq("ativo",True)
-        return q.execute().data or []
-    except Exception as e:
-        _log.error("listar_produtos: %s", e)
-        return []
-
-def buscar_produto_por_ean(ean):
-    try: return _m(get_sb().table("produtos").select("*,categorias(nome)").eq("ean",ean.strip()))
-    except Exception as e:
-        _log.error("buscar_produto_por_ean: %s", e)
-        return None
-
-def buscar_produto_por_id(pid):
-    try: return _m(get_sb().table("produtos").select("*,categorias(nome)").eq("id",pid))
-    except Exception as e:
-        _log.error("buscar_produto_por_id: %s", e)
-        return None
-
-def buscar_produtos_por_nome(nome) -> list:
-    try:
-        # Sanitiza entrada — remove caracteres perigosos para a query
-        nome_safe = nome.strip().replace("%","").replace("_","")[:100]
-        return get_sb().table("produtos").select("*,categorias(nome)").ilike("nome",f"%{nome_safe}%").eq("ativo",True).execute().data or []
-    except Exception as e:
-        _log.error("buscar_produtos_por_nome: %s", e)
-        return []
-
-def criar_produto(dados) -> dict:
-    try: return get_sb().table("produtos").insert(dados).execute().data[0]
-    except Exception as e:
-        _log.error("criar_produto: %s", e)
-        st.error("❌ Erro ao criar produto."); st.stop()
-
-def atualizar_produto(pid, dados):
-    try: get_sb().table("produtos").update(dados).eq("id",pid).execute()
-    except Exception as e:
-        _log.error("atualizar_produto: %s", e)
-        st.error("❌ Erro ao atualizar produto.")
-
-# ── ESTOQUE COM RESERVAS ─────────────────────────────────────────
-def estoque_disponivel(produto_id: str) -> float:
-    try:
-        prod = buscar_produto_por_id(produto_id)
-        if not prod: return 0.0
-        total = float(prod.get("quantidade_total_secundaria",0))
-        reservas = (get_sb().table("movimentacoes")
-                    .select("quantidade_convertida")
-                    .eq("produto_id",produto_id)
-                    .eq("tipo","saida").eq("tipo_saida","SOLICITADA")
-                    .in_("status",["pendente","aprovado"])
-                    .execute().data or [])
-        res = sum(float(r.get("quantidade_convertida",0)) for r in reservas)
-        return max(0.0, total - res)
-    except Exception as e:
-        _log.error("estoque_disponivel: %s", e)
-        return 0.0
-
-# ── DOCUMENTOS ───────────────────────────────────────────────────
-def criar_documento(dados) -> dict:
-    try: return get_sb().table("documentos").insert(dados).execute().data[0]
-    except Exception as e:
-        _log.error("criar_documento: %s", e)
-        return {}
-
-def upload_pdf(b, nome):
-    try:
-        sb = get_sb(); path = f"notas/{nome}"
-        sb.storage.from_("notas-fiscais").upload(path,b,file_options={"content-type":"application/pdf","upsert":"true"})
-        return sb.storage.from_("notas-fiscais").create_signed_url(path,60*60*24*365).get("signedURL")
-    except Exception as e:
-        _log.error("upload_pdf: %s", e)
-        st.warning("⚠️ Não foi possível fazer o upload do arquivo.")
-        return None
-
-# ── MOVIMENTAÇÕES ────────────────────────────────────────────────
-_SEL = """*,
-    produto:produtos(id,nome,codigo_interno,unidade_primaria,unidade_secundaria,fator_conversao,quantidade_total_secundaria),
-    sol:usuarios!movimentacoes_usuario_solicitante_fkey(nick,nome),
-    aut:usuarios!movimentacoes_usuario_autorizador_fkey(nick,nome),
-    exe:usuarios!movimentacoes_usuario_executor_fkey(nick,nome),
-    doc:documentos(nome_arquivo,status_envio,caminho_arquivo)"""
-
-def registrar_movimentacao(dados) -> dict:
-    try: return get_sb().table("movimentacoes").insert(dados).execute().data[0]
-    except Exception as e:
-        _log.error("registrar_movimentacao: %s", e)
-        st.error("❌ Erro ao registrar movimentação."); st.stop()
-
-def atualizar_movimentacao(mid, dados) -> dict:
-    try: return get_sb().table("movimentacoes").update(dados).eq("id",mid).execute().data[0]
-    except Exception as e:
-        _log.error("atualizar_movimentacao: %s", e)
-        st.error("❌ Erro ao atualizar movimentação.")
-        return {}
-
-def listar_movimentacoes(tipo=None,status=None,tipo_saida=None,produto_id=None,limite=200) -> list:
-    try:
-        q = get_sb().table("movimentacoes").select(_SEL).order("criado_em",desc=True).limit(limite)
-        if tipo: q = q.eq("tipo",tipo)
-        if status: q = q.eq("status",status)
-        if tipo_saida: q = q.eq("tipo_saida",tipo_saida)
-        if produto_id: q = q.eq("produto_id",produto_id)
-        return q.execute().data or []
-    except Exception as e:
-        _log.error("listar_movimentacoes: %s", e)
-        return []
-
-def listar_solicitacoes(status=None) -> list:
-    try:
-        q = (get_sb().table("movimentacoes").select(_SEL)
-             .eq("tipo","saida").eq("tipo_saida","SOLICITADA").order("criado_em",desc=True))
-        if status: q = q.eq("status",status)
-        return q.execute().data or []
-    except Exception as e:
-        _log.error("listar_solicitacoes: %s", e)
-        return []
-
-def listar_notificacoes_usuario(nick: str) -> list:
-    try:
-        return (get_sb().table("movimentacoes").select(_SEL)
-                .eq("nick_solicitante",nick)
-                .eq("tipo_saida","SOLICITADA")
-                .eq("status","aprovado")
-                .eq("notificacao_lida",False)
-                .execute().data or [])
-    except Exception as e:
-        _log.error("listar_notificacoes_usuario: %s", e)
-        return []  # Coluna pode não existir ainda
-
-def listar_notas_pendentes() -> list:
-    try:
-        return (get_sb().table("movimentacoes").select(_SEL)
-                .eq("tipo","entrada").eq("tipo_entrada","Nota Fiscal")
-                .eq("envio_financeiro",False).eq("status","concluido")
-                .order("criado_em",desc=True).execute().data or [])
-    except Exception as e:
-        _log.error("listar_notas_pendentes: %s", e)
-        return []
-
-def listar_notas_enviadas() -> list:
-    try:
-        return (get_sb().table("movimentacoes").select(_SEL)
-                .eq("tipo","entrada").eq("tipo_entrada","Nota Fiscal")
-                .eq("envio_financeiro",True)
-                .order("criado_em",desc=True).execute().data or [])
-    except Exception as e:
-        _log.error("listar_notas_enviadas: %s", e)
-        return []
-
-def historico_produto(produto_id, data_ini=None, data_fim=None) -> list:
-    try:
-        q = (get_sb().table("movimentacoes").select(_SEL)
-             .eq("produto_id",produto_id).order("criado_em",desc=False))
-        if data_ini: q = q.gte("criado_em",f"{data_ini}T00:00:00")
-        if data_fim: q = q.lte("criado_em",f"{data_fim}T23:59:59")
-        return q.execute().data or []
-    except Exception as e:
-        _log.error("historico_produto: %s", e)
-        return []
-
-# ── CONFIGURAÇÕES ────────────────────────────────────────────────
-def get_config(chave, default="") -> str:
-    try:
-        r = _m(get_sb().table("configuracoes").select("valor").eq("chave",chave))
-        return r["valor"] if r else default
-    except Exception as e:
-        _log.error("get_config %s: %s", chave, e)
-        return default
-
-def set_config(chave, valor):
-    try: get_sb().table("configuracoes").upsert({"chave":chave,"valor":valor}).execute()
-    except Exception as e:
-        _log.error("set_config %s: %s", chave, e)
-        st.error("❌ Erro ao salvar configuração.")
-
-def listar_configs() -> dict:
-    try: return {c["chave"]:c["valor"] for c in get_sb().table("configuracoes").select("*").execute().data or []}
-    except Exception as e:
-        _log.error("listar_configs: %s", e)
-        return {}
-
-# ── CONSUMO POR PERÍODO ──────────────────────────────────────────
-def consumo_por_periodo(data_ini, data_fim, setor=None) -> list:
-    try:
-        q = (get_sb().table("movimentacoes")
-             .select("criado_em,tipo,tipo_entrada,tipo_saida,quantidade_convertida,setor_solicitante,produto:produtos(nome,unidade_secundaria),exe:usuarios!movimentacoes_usuario_executor_fkey(nick)")
-             .in_("tipo",["entrada","saida"]).eq("status","concluido")
-             .gte("criado_em",f"{data_ini}T00:00:00")
-             .lte("criado_em",f"{data_fim}T23:59:59")
-             .order("criado_em",desc=False))
-        if setor: q = q.eq("setor_solicitante",setor)
-        return q.execute().data or []
-    except Exception as e:
-        _log.error("consumo_por_periodo: %s", e)
-        return []
-
-# ── DASHBOARD ────────────────────────────────────────────────────
-def stats_dashboard() -> dict:
-    _vazio = {"total_produtos":0,"criticos":0,"baixos":0,"ok":0,"pend_solicitacoes":0,
-              "pend_notas":0,"total_movimentacoes":0,"consumo_setor":{},"parados":0,"recentes":[],"produtos":[]}
-    try:
-        sb = get_sb(); prods = listar_produtos()
-        criticos=baixos=ok_c=0
-        for p in prods:
-            est=float(p.get("quantidade_total_secundaria") or 0)
-            minp=float(p.get("estoque_minimo_primario") or 0)
-            fat=float(p.get("fator_conversao") or 1)
-            if est<=0: criticos+=1
-            elif est<=minp*fat: baixos+=1
-            else: ok_c+=1
-        pend_sol=sb.table("movimentacoes").select("id",count="exact").eq("tipo","saida").eq("tipo_saida","SOLICITADA").eq("status","pendente").execute().count or 0
-        pend_nf=sb.table("movimentacoes").select("id",count="exact").eq("tipo_entrada","Nota Fiscal").eq("envio_financeiro",False).eq("status","concluido").execute().count or 0
-        total_mov=sb.table("movimentacoes").select("id",count="exact").execute().count or 0
-        saidas_ok=sb.table("movimentacoes").select("setor_solicitante,quantidade_convertida").eq("tipo","saida").eq("status","concluido").execute().data or []
-        consumo={}
-        for s in saidas_ok:
-            k=s.get("setor_solicitante") or "Sem setor"
-            consumo[k]=consumo.get(k,0)+float(s.get("quantidade_convertida") or 0)
-        from datetime import datetime,timedelta
-        lim=(datetime.utcnow()-timedelta(days=30)).isoformat()
-        ids_mov={m["produto_id"] for m in sb.table("movimentacoes").select("produto_id").gte("criado_em",lim).execute().data or []}
-        parados=sum(1 for p in prods if p["id"] not in ids_mov)
-        recentes=sb.table("movimentacoes").select("criado_em,tipo,quantidade_informada,unidade_informada,status,produtos(nome)").order("criado_em",desc=True).limit(10).execute().data or []
-        return {"total_produtos":len(prods),"criticos":criticos,"baixos":baixos,"ok":ok_c,
-                "pend_solicitacoes":pend_sol,"pend_notas":pend_nf,"total_movimentacoes":total_mov,
-                "consumo_setor":consumo,"parados":parados,"recentes":recentes,"produtos":prods}
-    except Exception as e:
-        _log.error("stats_dashboard: %s", e)
-        return _vazio
-
-
-# ── SOLICITAÇÕES DE COMPRA ───────────────────────────────────────
-# Colunas listadas explicitamente: evita quebra silenciosa quando alguma
-# coluna nova (migration) ainda não estiver no schema cache do Supabase.
-_SEL_SC_FULL = (
-    "id, produto_descricao, nome_solicitante, setor_solicitante, "
-    "nick_solicitante, usuario_id, status, motivo_rejeicao, "
-    "usuario_autorizador, data_autorizacao, observacao, criado_em, "
-    "codigo_requisicao, status_compra, obs_compra, "
-    "notificacao_compra_lida, notificacao_status_lida, entrega_confirmada, "
-    "autorizador:usuarios!solicitacoes_compra_usuario_autorizador_fkey(nick,nome)"
-)
-_SEL_SC_MIN = (
-    "id, produto_descricao, nome_solicitante, setor_solicitante, "
-    "nick_solicitante, usuario_id, status, motivo_rejeicao, "
-    "usuario_autorizador, data_autorizacao, observacao, criado_em"
+"""pages/solicitacoes.py — Solicitações ao almoxarifado + Solicitação de Compra"""
+import streamlit as st
+from utils.database import (
+    listar_produtos, listar_setores, registrar_movimentacao,
+    listar_solicitacoes, atualizar_movimentacao, listar_notificacoes_usuario,
+    estoque_disponivel, criar_solicitacao_compra, listar_solicitacoes_compra,
+    atualizar_solicitacao_compra, get_sb,
 )
 
-def listar_solicitacoes_compra(status=None) -> list:
-    """Retorna solicitacoes_compra. Usa select completo; fallback sem joins se falhar."""
-    def _query(sel):
-        q = get_sb().table("solicitacoes_compra").select(sel).order("criado_em", desc=True)
-        if status:
-            q = q.eq("status", status)
-        return q.execute().data or []
-
-    try:
-        return _query(_SEL_SC_FULL)
-    except Exception as e:
-        _log.error("listar_solicitacoes_compra (full): %s", e)
-        try:
-            dados = _query(_SEL_SC_MIN)
-            _log.warning("listar_solicitacoes_compra: fallback minimo (%d registros)", len(dados))
-            return dados
-        except Exception as e2:
-            _log.error("listar_solicitacoes_compra (fallback): %s", e2)
-            return []
-
-def criar_solicitacao_compra(dados: dict) -> dict:
-    try: return get_sb().table("solicitacoes_compra").insert(dados).execute().data[0]
-    except Exception as e:
-        _log.error("criar_solicitacao_compra: %s", e)
-        st.error("❌ Erro ao registrar solicitação de compra.")
-        st.stop()
-
-def atualizar_solicitacao_compra(scid: str, dados: dict):
-    try: get_sb().table("solicitacoes_compra").update(dados).eq("id", scid).execute()
-    except Exception as e:
-        _log.error("atualizar_solicitacao_compra: %s", e)
-        st.error("❌ Erro ao atualizar solicitação de compra.")
-
-def listar_solicitacoes_unificadas(status=None) -> list:
-    """
-    Retorna almoxarifado + compras numa lista única normalizada,
-    ordenada por criado_em desc. Usada no histórico unificado.
-    Cada item tem campo 'origem': 'almox' ou 'compra'.
-    """
+def _listar_unificadas(status=None) -> list:
+    """Une almoxarifado + compras numa lista ordenada por data. Autossuficiente."""
     alm  = listar_solicitacoes(status)
     comp = listar_solicitacoes_compra(status)
-
-    itens = []
-    for s in alm:
-        s["origem"] = "almox"
-        itens.append(s)
-    for s in comp:
-        s["origem"] = "compra"
-        itens.append(s)
-
+    for s in alm:  s["origem"] = "almox"
+    for s in comp: s["origem"] = "compra"
+    itens = alm + comp
     itens.sort(key=lambda x: x.get("criado_em") or "", reverse=True)
     return itens
+from utils.auth import sessao
+from utils.ui import badge
+from utils.fmt import datahora_br, qtd_br, agora_iso
+from utils.unidades import sigla_para_opcao
+from utils.sanitize import esc, esc_trunc
 
-def contar_solicitacoes_compra_pendentes() -> int:
-    try:
-        return get_sb().table("solicitacoes_compra").select("id", count="exact").eq("status","pendente").execute().count or 0
-    except Exception as e:
-        _log.error("contar_sc_pendentes: %s", e)
-        return 0
 
-# ── PREVISÃO DE DEMANDA (crowdsourcing histórico) ────────────────
-def historico_consumo_mensal(meses: int = 24) -> list:
-    """Retorna consumo mensal agrupado por produto dos últimos N meses."""
-    try:
-        from datetime import datetime, timedelta
-        lim = (datetime.utcnow() - timedelta(days=meses*30)).isoformat()
-        dados = (get_sb().table("movimentacoes")
-                 .select("criado_em,produto_id,quantidade_convertida,produto:produtos(nome,unidade_secundaria)")
-                 .eq("tipo","saida").eq("status","concluido")
-                 .gte("criado_em", lim)
-                 .order("criado_em", desc=False)
-                 .execute().data or [])
-        return dados
-    except Exception as e:
-        _log.error("historico_consumo_mensal: %s", e)
-        return []
+# ══ CONSTANTES ══════════════════════════════════════════════════════════════════
+STATUS_COMPRA_OPCOES = [
+    "Requisição enviada ao CNR",
+    "Pedido de Compra Criado",
+    "Aguardando Entrega",
+    "Recebido",
+]
+
+# Cores de badge por status de andamento
+_COR_STATUS = {
+    "Requisição enviada ao CNR": ("var(--info)",  "📋"),
+    "Pedido de Compra Criado":   ("var(--warn)",  "📝"),
+    "Aguardando Entrega":        ("var(--warn)",  "🚚"),
+    "Recebido":                  ("var(--ok)",    "✅"),
+}
+
+
+def _badge_status_compra(status: str) -> str:
+    """Retorna HTML de badge colorido para o status de andamento da compra."""
+    cor, emoji = _COR_STATUS.get(status, ("var(--t3)", "🔄"))
+    return (f'<span style="display:inline-block;font-size:.72rem;font-weight:600;'
+            f'color:{cor};background:color-mix(in srgb,{cor} 12%,transparent);'
+            f'border:1px solid color-mix(in srgb,{cor} 30%,transparent);'
+            f'border-radius:4px;padding:.1rem .45rem;">'
+            f'{emoji} {esc(status)}</span>')
+
+
+# ══ TELA USUÁRIO ════════════════════════════════════════════════════════════════
+
+def tela_solicitacoes_usuario():
+    u = sessao()
+    st.markdown('<div class="pg">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="pg-title">📋 Solicitações</div>'
+        '<div class="pg-sub">Faça pedidos ao almoxarifado ou solicite compra de produtos</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Notificações: aprovação de itens do almoxarifado ──────────────────────
+    notifs = listar_notificacoes_usuario(u["nick"])
+    for n in notifs:
+        prod = (n.get("produto") or {}).get("nome", "—")
+        un   = sigla_para_opcao(n.get("unidade_informada", "UN"))
+        st.success(
+            f"🔔 **Aprovada!** {qtd_br(n['quantidade_informada'])} {un} de **{prod}** "
+            f"está reservado e pronto para retirada."
+        )
+        if st.button("✅ Entendido", key=f"notif_{n['id']}"):
+            try: atualizar_movimentacao(n["id"], {"notificacao_lida": True})
+            except: pass
+            st.rerun()
+
+    # ── Notificações: aprovação / rejeição de compra ──────────────────────────
+    sc_todas  = listar_solicitacoes_compra()
+    sc_minhas = [s for s in sc_todas if s.get("nick_solicitante") == u["nick"]]
+
+    for s in sc_minhas:
+        # Notificação de aprovação ou rejeição ainda não lida
+        if not s.get("notificacao_compra_lida", True) and s.get("status") in ("aprovado", "rejeitado"):
+            if s["status"] == "aprovado":
+                st.success(
+                    f"🔔 **Pedido aprovado!** _{esc(s['produto_descricao'])}_ — "
+                    f"O planejamento seguirá o processo de compra. "
+                    f"Acompanhe na aba **Minhas Solicitações**."
+                )
+            else:
+                motivo = s.get("motivo_rejeicao", "")
+                st.error(
+                    f"❌ **Solicitação reprovada!** _{esc(s['produto_descricao'])}_ — "
+                    f"Favor verificar o motivo na aba **Minhas Solicitações**."
+                    + (f" Motivo: {esc(motivo)}" if motivo else "")
+                )
+            if st.button("✅ Entendido", key=f"notif_sc_{s['id']}"):
+                try: atualizar_solicitacao_compra(s["id"], {"notificacao_compra_lida": True})
+                except: pass
+                st.rerun()
+
+        # Notificação de mudança de status de andamento (após aprovação)
+        if (s.get("status") == "aprovado"
+                and s.get("status_compra")
+                and not s.get("notificacao_status_lida", True)):
+            sc_status = s.get("status_compra", "")
+            st.info(
+                f"🔄 **Atualização de compra:** _{esc(s['produto_descricao'])}_ — "
+                f"Novo status: **{esc(sc_status)}**. "
+                f"Veja detalhes na aba **Minhas Solicitações**."
+            )
+            if st.button("✅ Entendido", key=f"notif_sc_status_{s['id']}"):
+                try: atualizar_solicitacao_compra(s["id"], {"notificacao_status_lida": True})
+                except: pass
+                st.rerun()
+
+    t1, t2, t3 = st.tabs(["Solicitação ao Almoxarifado", "Solicitação de Compra", "Minhas Solicitações"])
+    with t1: _form_solicitar(u)
+    with t2: _form_compra(u)
+    with t3: _minhas(u, sc_minhas)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ══ TELA ALMOXARIFE / ADMIN ══════════════════════════════════════════════════════
+
+def tela_solicitacoes_almoxarife():
+    st.markdown('<div class="pg">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="pg-title">📋 Solicitações</div>'
+        '<div class="pg-sub">Gerencie aprovações e consulte o histórico</div>',
+        unsafe_allow_html=True,
+    )
+    t1, t2, t3 = st.tabs(["Aprovar / Rejeitar", "Compras em Andamento", "Histórico"])
+    with t1: _aprovar_unificado()
+    with t2: _compras_em_andamento()
+    with t3: _hist_completo()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def tela_solicitacoes_admin():
+    """Tela de solicitacoes para o perfil Administrador.
+    Acesso completo: pode fazer solicitacoes como usuario
+    e tambem gerenciar aprovacoes, compras e historico.
+    """
+    u = sessao()
+    st.markdown('<div class="pg">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="pg-title">📋 Solicitações</div>'
+        '<div class="pg-sub">Acesso completo — solicitações, aprovações, compras e histórico</div>',
+        unsafe_allow_html=True,
+    )
+    t1, t2, t3, t4 = st.tabs([
+        "Solicitação ao Almoxarifado",
+        "Aprovar / Rejeitar",
+        "Compras em Andamento",
+        "Histórico",
+    ])
+    with t1: _form_solicitar(u)
+    with t2: _aprovar_unificado()
+    with t3: _compras_em_andamento()
+    with t4: _hist_completo()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ── Form: Solicitação ao Almoxarifado ────────────────────────────────────────
+
+def _form_solicitar(u):
+    if st.session_state.get("sol_enviada_ok"):
+        st.success("📨 **Solicitação Enviada.** O retorno de aprovação será dado no seu aplicativo.")
+        if st.button("➕ Nova Solicitação ao Almoxarifado", type="primary"):
+            del st.session_state["sol_enviada_ok"]
+            st.session_state.pop("sol_prod_sel", None)
+            st.rerun()
+        return
+
+    prods = listar_produtos()
+    sets  = listar_setores()
+    if not prods:
+        st.warning("Nenhum produto cadastrado.")
+        return
+
+    pm = {p["nome"]: p for p in prods}
+    sn = [s["nome"] for s in sets] or ["Sem setor"]
+
+    st.markdown('<div class="card"><div class="card-h">📝 Solicitação ao Almoxarifado</div>', unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        prod_nome = st.selectbox("Produto *", list(pm.keys()), key="sol_prod_sel")
+        prod      = pm[prod_nome]
+        un_sec    = prod.get("unidade_secundaria", "UN")
+        un_lbl    = sigla_para_opcao(un_sec)
+        disp      = estoque_disponivel(prod["id"])
+        cor_est   = "var(--ok)" if disp > 0 else "var(--err)"
+        st.markdown(f"""
+        <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:7px;
+                    padding:.55rem .9rem;font-size:.82rem;margin:.4rem 0;">
+            📦 Saldo disponível: <strong style="color:{cor_est};">{qtd_br(disp)} {un_lbl}</strong>
+        </div>
+        """, unsafe_allow_html=True)
+        qtd = st.number_input(f"Quantidade * ({un_lbl})", min_value=0.001, value=1.0, step=1.0, key="sol_qtd")
+    with c2:
+        setor  = st.selectbox("Setor *", sn, key="sol_setor")
+        nome_s = st.text_input("Nome do solicitante *", value=u.get("nome") or u.get("nick", ""), key="sol_nome")
+        obs    = st.text_area("Observação (opcional)", height=68, key="sol_obs")
+
+    if st.button("📨 Enviar Solicitação →", type="primary", use_container_width=True, key="btn_enviar_sol"):
+        if not nome_s.strip():
+            st.error("Nome obrigatório.")
+        else:
+            registrar_movimentacao({
+                "produto_id":            prod["id"],
+                "tipo":                  "saida",
+                "tipo_saida":            "SOLICITADA",
+                "status":                "pendente",
+                "quantidade_informada":  qtd,
+                "unidade_informada":     un_sec,
+                "quantidade_convertida": qtd,
+                "setor_solicitante":     setor,
+                "nome_solicitante":      nome_s.strip(),
+                "nick_solicitante":      u["nick"],
+                "observacao":            obs.strip() or None,
+                "usuario_solicitante":   u["id"],
+            })
+            st.session_state["sol_enviada_ok"] = True
+            st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ── Form: Solicitação de Compra ──────────────────────────────────────────────
+
+def _form_compra(u):
+    if st.session_state.get("compra_enviada_ok"):
+        st.success("📨 **Solicitação Enviada.** Acompanhe o status pela aba Minhas Solicitações.")
+        if st.button("➕ Nova Solicitação de Compra", type="primary"):
+            del st.session_state["compra_enviada_ok"]
+            st.rerun()
+        return
+
+    sets = listar_setores()
+    sn   = [s["nome"] for s in sets] or ["Sem setor"]
+
+    st.markdown('<div class="card"><div class="card-h">🛒 Solicitação de Compra</div>', unsafe_allow_html=True)
+    st.info("Use este formulário para solicitar a compra de produtos que não estão no estoque.")
+
+    with st.form("form_solicitacao_compra", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            produto_desc = st.text_input("Produto a comprar *", placeholder="Descreva o produto necessário")
+            qtd_desc     = st.text_input("Quantidade estimada (opcional)", placeholder="Ex: 2 caixas, 10 unidades")
+        with c2:
+            setor  = st.selectbox("Setor *", sn)
+            nome_s = st.text_input("Seu nome *", value=u.get("nome") or u.get("nick", ""))
+            obs    = st.text_area("Justificativa / Observação (opcional)", height=68)
+        enviou = st.form_submit_button("📨 Enviar Solicitação de Compra →", type="primary", use_container_width=True)
+
+    if enviou:
+        erros = []
+        if not produto_desc.strip(): erros.append("Descreva o produto.")
+        if not nome_s.strip():       erros.append("Nome obrigatório.")
+        if erros:
+            for e in erros: st.error(e)
+        else:
+            obs_final = obs.strip()
+            if qtd_desc.strip():
+                obs_final = f"Qtd estimada: {qtd_desc.strip()}" + (f" | {obs_final}" if obs_final else "")
+            criar_solicitacao_compra({
+                "produto_descricao": produto_desc.strip(),
+                "nome_solicitante":  nome_s.strip(),
+                "setor_solicitante": setor,
+                "nick_solicitante":  u.get("nick", ""),
+                "usuario_id":        u["id"],
+                "status":            "pendente",
+                "observacao":        obs_final or None,
+                # Demais colunas têm DEFAULT no banco — não enviar no INSERT
+            })
+            st.session_state["compra_enviada_ok"] = True
+            st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ── Minhas Solicitações (usuário) ────────────────────────────────────────────
+
+def _minhas(u, sc_minhas: list):
+    # ── Solicitações ao almoxarifado ──────────────────────────────────────
+    todas  = listar_solicitacoes()
+    minhas = [s for s in todas if s.get("nick_solicitante") == u["nick"]]
+
+    st.markdown('<div class="card"><div class="card-h">📦 Minhas Solicitações ao Almoxarifado</div>', unsafe_allow_html=True)
+    if not minhas:
+        st.markdown('<p style="color:var(--t3);font-size:.82rem;">Nenhuma solicitação.</p>', unsafe_allow_html=True)
+    else:
+        rows = ""
+        for m in minhas:
+            prod    = m.get("produto") or {}
+            b       = badge(m["status"].capitalize(), m["status"])
+            un_lbl  = sigla_para_opcao(m.get("unidade_informada", "UN"))
+            motivo_html = ""
+            if m.get("status") == "rejeitado" and m.get("motivo_rejeicao"):
+                motivo_html = (f'<br><span style="font-size:.7rem;color:var(--err);">'
+                               f'💬 Motivo: {esc_trunc(m["motivo_rejeicao"], 60)}</span>')
+            rows += (f'<tr>'
+                     f'<td style="color:var(--t3);font-size:.73rem;">{datahora_br(m["criado_em"])}</td>'
+                     f'<td><strong>{esc(prod.get("nome","—"))}</strong></td>'
+                     f'<td>{qtd_br(m["quantidade_informada"])} {un_lbl}</td>'
+                     f'<td>{esc(m.get("setor_solicitante","—"))}</td>'
+                     f'<td>{b}{motivo_html}</td>'
+                     f'</tr>')
+        st.markdown(
+            f'<table class="tbl"><thead><tr>'
+            f'<th>Data</th><th>Produto</th><th>Qtd</th><th>Setor</th><th>Status</th>'
+            f'</tr></thead><tbody>{rows}</tbody></table>',
+            unsafe_allow_html=True,
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── Minhas Solicitações de Compra ─────────────────────────────────────
+    # Exibe enquanto não houver entrega confirmada pelo almoxarife
+    ativas = [s for s in sc_minhas if not s.get("entrega_confirmada", False)]
+
+    st.markdown('<div class="card"><div class="card-h">🛒 Minhas Solicitações de Compra</div>', unsafe_allow_html=True)
+    if not ativas:
+        st.markdown('<p style="color:var(--t3);font-size:.82rem;">Nenhuma solicitação de compra ativa.</p>', unsafe_allow_html=True)
+    else:
+        for s in ativas:
+            b     = badge(s["status"].capitalize(), s["status"])
+            cod   = esc(s.get("codigo_requisicao") or "—")
+            prod  = esc(s["produto_descricao"])
+            setor = esc(s.get("setor_solicitante", "—"))
+            data  = datahora_br(s["criado_em"])
+
+            andamento_html = ""
+            if s.get("status") == "aprovado" and s.get("status_compra"):
+                andamento_html = f'<br>{_badge_status_compra(s["status_compra"])}'
+                if s.get("obs_compra"):
+                    andamento_html += (
+                        f'<br><span style="font-size:.7rem;color:var(--t3);">'
+                        f'📝 {esc_trunc(s["obs_compra"], 80)}</span>'
+                    )
+
+            motivo_html = ""
+            if s.get("status") == "rejeitado" and s.get("motivo_rejeicao"):
+                motivo_html = (
+                    f'<br><span style="font-size:.7rem;color:var(--err);">'
+                    f'💬 Motivo: {esc_trunc(s["motivo_rejeicao"], 60)}</span>'
+                )
+
+            st.markdown(f"""
+            <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;
+                        padding:.75rem 1rem;margin:.4rem 0;font-size:.83rem;">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.4rem;">
+                    <span style="font-weight:700;">{prod}</span>
+                    <span style="font-size:.72rem;color:var(--t3);">#{cod}</span>
+                </div>
+                <div style="color:var(--t3);font-size:.75rem;margin:.15rem 0 .3rem 0;">
+                    {setor} &nbsp;·&nbsp; {data}
+                </div>
+                <div>{b}{andamento_html}{motivo_html}</div>
+            </div>
+            """, unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ── Aprovar / Rejeitar (almoxarife/admin) ────────────────────────────────────
+
+def _aprovar_unificado():
+    """
+    Lista única e intercalada de todos os pedidos pendentes,
+    ordenada por data de criação (mais antigo primeiro).
+    Cada item tem um badge de tipo — 🏪 Almoxarifado ou 🛒 Compra —
+    para identificação rápida.
+    """
+    u = sessao()
+
+    pend_alm  = listar_solicitacoes("pendente")
+    pend_comp = listar_solicitacoes_compra("pendente")
+
+    # Normaliza almoxarifado e compra num formato comum para ordenar juntos
+    itens = []
+    for s in pend_alm:
+        itens.append({"tipo": "almox", "criado_em": s.get("criado_em", ""), "raw": s})
+    for s in pend_comp:
+        itens.append({"tipo": "compra", "criado_em": s.get("criado_em", ""), "raw": s})
+
+    # Ordena por data de criação — mais antigo no topo
+    itens.sort(key=lambda x: x["criado_em"])
+
+    st.markdown('<div class="card"><div class="card-h">🔐 Pendentes de Aprovação</div>', unsafe_allow_html=True)
+
+    if not itens:
+        st.markdown('<p style="color:var(--t3);font-size:.82rem;">Nenhuma solicitação pendente de aprovação.</p>', unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+        _popup_confirmacao(u)
+        return
+
+    for item in itens:
+        tipo = item["tipo"]
+        s    = item["raw"]
+
+        if tipo == "almox":
+            prod   = s.get("produto") or {}
+            sol    = s.get("sol")     or {}
+            un_lbl = sigla_para_opcao(s.get("unidade_informada", "UN"))
+            disp   = estoque_disponivel(prod.get("id", ""))
+            cor_disp = "var(--ok)" if disp >= float(s["quantidade_convertida"]) else "var(--err)"
+
+            c1, c2, c3, c4 = st.columns([4, 3, 1, 1])
+            with c1:
+                # Badge de tipo + nome do produto
+                st.markdown(
+                    f'<span style="font-size:.7rem;font-weight:600;color:var(--t3);">'
+                    f'🏪 Almoxarifado</span><br>'
+                    f'<strong>{esc(prod.get("nome","—"))}</strong>',
+                    unsafe_allow_html=True,
+                )
+                st.caption(f"{sol.get('nick','—')} · {s.get('setor_solicitante','—')} · {datahora_br(s['criado_em'])}")
+                if s.get("observacao"):
+                    st.caption(f"Obs: {esc_trunc(s['observacao'], 60)}")
+            with c2:
+                st.markdown(f"**{qtd_br(s['quantidade_informada'])} {un_lbl}**")
+                st.markdown(
+                    f"<span style='font-size:.75rem;color:{cor_disp};'>"
+                    f"Disponível: {qtd_br(disp)} {un_lbl}</span>",
+                    unsafe_allow_html=True,
+                )
+            with c3:
+                if st.button("✅", key=f"a_{s['id']}", help="Aprovar"):
+                    st.session_state["conf_sol"] = {
+                        "id": s["id"], "tipo": "almox", "acao": "aprovar",
+                        "prod": prod.get("nome", "—"),
+                        "qtd": qtd_br(s["quantidade_informada"]), "un": un_lbl,
+                        "nick": sol.get("nick", ""),
+                    }
+                    st.rerun()
+            with c4:
+                if st.button("❌", key=f"r_{s['id']}", help="Rejeitar"):
+                    st.session_state["conf_sol"] = {
+                        "id": s["id"], "tipo": "almox", "acao": "rejeitar",
+                        "prod": prod.get("nome", "—"),
+                        "qtd": qtd_br(s["quantidade_informada"]), "un": un_lbl,
+                        "nick": sol.get("nick", ""),
+                    }
+                    st.rerun()
+
+        else:  # tipo == "compra"
+            cod = s.get("codigo_requisicao") or "—"
+
+            c1, c2, c3, c4 = st.columns([4, 3, 1, 1])
+            with c1:
+                # Badge de tipo + descrição do produto
+                st.markdown(
+                    f'<span style="font-size:.7rem;font-weight:600;color:var(--info);">'
+                    f'🛒 Compra</span><br>'
+                    f'<strong>{esc(s["produto_descricao"])}</strong>',
+                    unsafe_allow_html=True,
+                )
+                st.caption(
+                    f"{s.get('nome_solicitante','—')} · "
+                    f"{s.get('setor_solicitante','—')} · "
+                    f"{datahora_br(s['criado_em'])}"
+                )
+                if s.get("observacao"):
+                    st.caption(f"Obs: {esc_trunc(s['observacao'], 60)}")
+            with c2:
+                st.markdown(
+                    f"<span style='font-size:.75rem;color:var(--t3);'>#{esc(cod)}</span>",
+                    unsafe_allow_html=True,
+                )
+            with c3:
+                if st.button("✅", key=f"sc_a_{s['id']}", help="Aprovar"):
+                    st.session_state["conf_sol"] = {
+                        "id": s["id"], "tipo": "compra", "acao": "aprovar",
+                        "prod": s["produto_descricao"], "qtd": "", "un": "",
+                        "nick": s.get("nick_solicitante", ""),
+                    }
+                    st.rerun()
+            with c4:
+                if st.button("❌", key=f"sc_r_{s['id']}", help="Rejeitar"):
+                    st.session_state["conf_sol"] = {
+                        "id": s["id"], "tipo": "compra", "acao": "rejeitar",
+                        "prod": s["produto_descricao"], "qtd": "", "un": "",
+                        "nick": s.get("nick_solicitante", ""),
+                    }
+                    st.rerun()
+
+        st.markdown('<div class="div"></div>', unsafe_allow_html=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+    _popup_confirmacao(u)
+
+
+# ── Compras em Andamento (almoxarife/admin) ──────────────────────────────────
+
+def _compras_em_andamento():
+    """
+    Tabela de compras aprovadas com:
+    - Código de requisição
+    - Lista suspensa de status (4 etapas)
+    - Campo de observação livre
+    - Botão salvar (gera notificação ao usuário)
+    - Arquivamento automático ao marcar 'Recebido' e confirmar
+    """
+    u = sessao()
+    sc_todas  = listar_solicitacoes_compra()
+    em_aberto = [s for s in sc_todas
+                 if s.get("status") == "aprovado"
+                 and not s.get("entrega_confirmada", False)]
+
+    st.markdown('<div class="card"><div class="card-h">🚚 Compras em Andamento</div>', unsafe_allow_html=True)
+
+    if not em_aberto:
+        st.markdown(
+            '<p style="color:var(--t3);font-size:.82rem;">Nenhuma compra aprovada em andamento.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+        _hist_compras_arquivadas(sc_todas)
+        return
+
+    # Cabeçalho da tabela
+    hc1, hc2, hc3, hc4, hc5 = st.columns([2.5, 2, 3, 3, 1])
+    for col, label in zip([hc1, hc2, hc3, hc4, hc5],
+                          ["Código / Produto", "Solicitante", "Status de Andamento", "Observação", ""]):
+        col.markdown(
+            f"<span style='font-size:.72rem;font-weight:700;color:var(--t3);'>{label}</span>",
+            unsafe_allow_html=True,
+        )
+    st.markdown('<div class="div" style="margin:.3rem 0;"></div>', unsafe_allow_html=True)
+
+    for s in em_aberto:
+        cod          = s.get("codigo_requisicao") or "—"
+        prod         = s["produto_descricao"]
+        solicit      = s.get("nome_solicitante", "—")
+        setor        = s.get("setor_solicitante", "—")
+        status_atual = s.get("status_compra") or STATUS_COMPRA_OPCOES[0]
+        obs_atual    = s.get("obs_compra") or ""
+
+        try:    idx = STATUS_COMPRA_OPCOES.index(status_atual)
+        except: idx = 0
+
+        c1, c2, c3, c4, c5 = st.columns([2.5, 2, 3, 3, 1])
+
+        with c1:
+            st.markdown(
+                f"<span style='font-size:.72rem;color:var(--t3);'>#{esc(cod)}</span><br>"
+                f"<strong style='font-size:.85rem;'>{esc(prod)}</strong>",
+                unsafe_allow_html=True,
+            )
+        with c2:
+            st.markdown(
+                f"<span style='font-size:.8rem;'>{esc(solicit)}</span><br>"
+                f"<span style='font-size:.72rem;color:var(--t3);'>{esc(setor)}</span>",
+                unsafe_allow_html=True,
+            )
+        with c3:
+            novo_status = st.selectbox(
+                "status",
+                options=STATUS_COMPRA_OPCOES,
+                index=idx,
+                key=f"sc_status_{s['id']}",
+                label_visibility="collapsed",
+            )
+        with c4:
+            nova_obs = st.text_input(
+                "obs",
+                value=obs_atual,
+                placeholder="Observação livre...",
+                key=f"sc_obs_{s['id']}",
+                label_visibility="collapsed",
+            )
+        with c5:
+            if st.button("💾", key=f"sc_save_{s['id']}", help="Salvar alterações"):
+                status_mudou = novo_status != status_atual
+                atualizar_solicitacao_compra(s["id"], {
+                    "status_compra":         novo_status,
+                    "obs_compra":            nova_obs.strip() or None,
+                    # Dispara notificação ao usuário se o status mudou
+                    "notificacao_status_lida": False if status_mudou else s.get("notificacao_status_lida", True),
+                })
+                st.toast("✅ Atualizado!" if not status_mudou else "✅ Status atualizado! Usuário será notificado.")
+                st.rerun()
+
+        # Botão de confirmar recebimento — aparece apenas quando status = "Recebido"
+        if novo_status == "Recebido" or status_atual == "Recebido":
+            confirmar_key = f"sc_recebido_{s['id']}"
+            if st.button(
+                "📦 Confirmar Recebimento e Arquivar",
+                key=confirmar_key,
+                help="Marca como concluído e remove da lista de andamento",
+            ):
+                atualizar_solicitacao_compra(s["id"], {
+                    "status_compra":      "Recebido",
+                    "entrega_confirmada": True,
+                    "notificacao_status_lida": False,  # notifica usuário do recebimento
+                })
+                st.success("📦 Recebimento confirmado! Item arquivado.")
+                st.rerun()
+
+        st.markdown('<div class="div" style="margin:.4rem 0;"></div>', unsafe_allow_html=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+    _hist_compras_arquivadas(sc_todas)
+
+
+def _hist_compras_arquivadas(sc_todas: list):
+    """Expander com histórico das compras já arquivadas (entrega confirmada)."""
+    arquivadas = [s for s in sc_todas if s.get("entrega_confirmada", False)]
+    with st.expander(f"📁 Histórico — Entregas Confirmadas ({len(arquivadas)})"):
+        if not arquivadas:
+            st.info("Nenhuma entrega confirmada ainda.")
+            return
+        rows = ""
+        for s in arquivadas:
+            cod  = esc(s.get("codigo_requisicao") or "—")
+            aut  = (s.get("autorizador") or {}).get("nick", "—")
+            obs_c = esc_trunc(s.get("obs_compra") or "—", 40)
+            rows += (
+                f'<tr>'
+                f'<td style="color:var(--t3);font-size:.73rem;">{datahora_br(s["criado_em"])}</td>'
+                f'<td><span style="font-size:.72rem;color:var(--t3);">#{cod}</span></td>'
+                f'<td><strong>{esc(s["produto_descricao"])}</strong></td>'
+                f'<td>{esc(s.get("nome_solicitante","—"))}</td>'
+                f'<td>{esc(s.get("setor_solicitante","—"))}</td>'
+                f'<td>{aut}</td>'
+                f'<td>{obs_c}</td>'
+                f'<td>{_badge_status_compra("Recebido")}</td>'
+                f'</tr>'
+            )
+        st.markdown(
+            f'<table class="tbl"><thead><tr>'
+            f'<th>Data</th><th>Código</th><th>Produto</th>'
+            f'<th>Solicitante</th><th>Setor</th><th>Autorizador</th>'
+            f'<th>Obs</th><th>Status</th>'
+            f'</tr></thead><tbody>{rows}</tbody></table>',
+            unsafe_allow_html=True,
+        )
+
+
+# ── Pop-up de confirmação unificado ─────────────────────────────────────────
+
+def _popup_confirmacao(u):
+    """Pop-up para confirmar aprovação ou rejeição (almoxarifado ou compra)."""
+    conf = st.session_state.get("conf_sol")
+    if not conf:
+        return
+
+    acao     = conf["acao"]
+    emoji    = "✅" if acao == "aprovar" else "❌"
+    titulo   = "Aprovar" if acao == "aprovar" else "Rejeitar"
+    cor      = "var(--ok-bg)"  if acao == "aprovar" else "var(--err-bg)"
+    borda    = "rgba(22,163,74,.3)" if acao == "aprovar" else "rgba(220,38,38,.3)"
+    tipo     = conf.get("tipo", "almox")
+    tipo_lbl = "Solicitação de Compra" if tipo == "compra" else "Solicitação ao Almoxarifado"
+    qtd_info = f"<b>Qtd:</b> {conf['qtd']} {conf['un']}<br>" if conf.get("qtd") else ""
+
+    st.markdown(f"""
+    <div style="background:{cor};border:2px solid {borda};border-radius:10px;
+                padding:1.2rem 1.5rem;margin:1rem 0;">
+        <div style="font-size:1rem;font-weight:700;margin-bottom:.6rem;">
+            {emoji} Confirmar {titulo} — {tipo_lbl}
+        </div>
+        <div style="font-size:.85rem;color:var(--t2);line-height:1.8;">
+            <b>Produto:</b> {esc(conf['prod'])}<br>
+            {qtd_info}
+            <b>Solicitante:</b> {esc(conf['nick'])}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    motivo_rej = ""
+    if acao == "rejeitar":
+        motivo_rej = st.text_area("Motivo da rejeição * (será exibido ao solicitante)", key="motivo_rej_input")
+
+    cs, cn, _ = st.columns([1, 1, 4])
+    with cs:
+        if st.button(f"{emoji} SIM, {titulo.lower()}", type="primary", use_container_width=True):
+            if acao == "rejeitar" and not motivo_rej.strip():
+                st.error("Informe o motivo.")
+                return
+
+            ok = False
+            if tipo == "compra":
+                dados = {
+                    "status":                 "aprovado" if acao == "aprovar" else "rejeitado",
+                    "usuario_autorizador":     u["id"],
+                    "data_autorizacao":        agora_iso(),
+                    "notificacao_compra_lida": False,
+                }
+                if acao == "aprovar":
+                    dados["status_compra"]           = STATUS_COMPRA_OPCOES[0]
+                    dados["notificacao_status_lida"]  = True
+                if acao == "rejeitar":
+                    dados["motivo_rejeicao"] = motivo_rej.strip()
+
+                try:
+                    sb = get_sb()
+                    resp = sb.table("solicitacoes_compra").update(dados).eq("id", conf["id"]).execute()
+                    ok = bool(resp and resp.data)
+                except Exception:
+                    ok = False
+                    st.error("❌ Erro ao atualizar solicitação de compra. Contate o administrador.")
+            else:
+                dados = {
+                    "status":              "aprovado" if acao == "aprovar" else "rejeitado",
+                    "usuario_autorizador": u["id"],
+                    "data_autorizacao":    agora_iso(),
+                    "notificacao_lida":    False,
+                }
+                if acao == "rejeitar":
+                    dados["motivo_rejeicao"] = motivo_rej.strip()
+
+                sb = get_sb()
+                resp = sb.table("movimentacoes").update(dados).eq("id", conf["id"]).execute()
+                ok = bool(resp and resp.data)
+
+            if ok:
+                st.success(f"{'✅ Aprovada' if acao == 'aprovar' else '❌ Rejeitada com motivo registrado'}!")
+                del st.session_state["conf_sol"]
+                st.rerun()
+            else:
+                st.error("❌ Não foi possível atualizar. Tente novamente ou verifique os logs.")
+
+    with cn:
+        if st.button("↩ Cancelar", use_container_width=True):
+            del st.session_state["conf_sol"]
+            st.rerun()
+
+
+# ── Histórico completo (almoxarife/admin) ────────────────────────────────────
+
+def _hist_completo():
+    """Histórico unificado: almoxarifado + compras na mesma tabela, ordenados por data."""
+    todas = listar_solicitacoes_unificadas()
+
+    st.markdown('<div class="card"><div class="card-h">📋 Histórico — Todas as Solicitações</div>', unsafe_allow_html=True)
+    if not todas:
+        st.info("Nenhuma solicitação registrada.")
+    else:
+        rows = ""
+        for m in todas:
+            origem = m.get("origem", "almox")
+            b      = badge(m["status"].capitalize(), m["status"])
+            data   = datahora_br(m["criado_em"])
+            setor  = esc(m.get("setor_solicitante", "—"))
+            solicit = esc(m.get("nome_solicitante", "—"))
+
+            motivo_html = ""
+            if m.get("status") == "rejeitado" and m.get("motivo_rejeicao"):
+                motivo_html = (f'<br><span style="font-size:.7rem;color:var(--err);">'
+                               f'💬 {esc_trunc(m["motivo_rejeicao"], 50)}</span>')
+
+            if origem == "almox":
+                prod   = m.get("produto") or {}
+                un_lbl = sigla_para_opcao(m.get("unidade_informada", "UN"))
+                tipo_badge = '<span style="font-size:.68rem;color:var(--t3);">🏪 Almox</span>'
+                descricao  = f'<strong>{esc(prod.get("nome","—"))}</strong>'
+                detalhe    = f'{qtd_br(m["quantidade_informada"])} {un_lbl}'
+            else:
+                cod        = esc(m.get("codigo_requisicao") or "—")
+                sc_status  = esc(m.get("status_compra") or "—")
+                tipo_badge = '<span style="font-size:.68rem;color:var(--info);">🛒 Compra</span>'
+                descricao  = f'<strong>{esc(m.get("produto_descricao","—"))}</strong>'
+                detalhe    = f'#{cod} · {sc_status}'
+
+            rows += (
+                f'<tr>'
+                f'<td style="color:var(--t3);font-size:.73rem;">{data}</td>'
+                f'<td>{tipo_badge}<br>{descricao}</td>'
+                f'<td style="font-size:.78rem;color:var(--t3);">{detalhe}</td>'
+                f'<td>{setor}</td>'
+                f'<td>{solicit}</td>'
+                f'<td>{b}{motivo_html}</td>'
+                f'</tr>'
+            )
+        st.markdown(
+            f'<table class="tbl"><thead><tr>'
+            f'<th>Data</th><th>Tipo / Produto</th><th>Detalhe</th>'
+            f'<th>Setor</th><th>Solicitante</th><th>Status</th>'
+            f'</tr></thead><tbody>{rows}</tbody></table>',
+            unsafe_allow_html=True,
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
