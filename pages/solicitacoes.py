@@ -128,6 +128,31 @@ def tela_solicitacoes_almoxarife():
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+def tela_solicitacoes_admin():
+    """Tela de solicitacoes para o perfil Administrador.
+    Acesso completo: pode fazer solicitacoes como usuario
+    e tambem gerenciar aprovacoes, compras e historico.
+    """
+    u = sessao()
+    st.markdown('<div class="pg">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="pg-title">📋 Solicitações</div>'
+        '<div class="pg-sub">Acesso completo — solicitações, aprovações, compras e histórico</div>',
+        unsafe_allow_html=True,
+    )
+    t1, t2, t3, t4 = st.tabs([
+        "Solicitação ao Almoxarifado",
+        "Aprovar / Rejeitar",
+        "Compras em Andamento",
+        "Histórico",
+    ])
+    with t1: _form_solicitar(u)
+    with t2: _aprovar_unificado()
+    with t3: _compras_em_andamento()
+    with t4: _hist_completo()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 # ── Form: Solicitação ao Almoxarifado ────────────────────────────────────────
 
 def _form_solicitar(u):
