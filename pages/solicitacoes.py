@@ -730,7 +730,7 @@ def _popup_confirmacao(u):
 
 def _hist_completo():
     """Histórico unificado: almoxarifado + compras na mesma tabela, ordenados por data."""
-    todas = listar_solicitacoes_unificadas()
+    todas = _listar_unificadas()
 
     st.markdown('<div class="card"><div class="card-h">📋 Histórico — Todas as Solicitações</div>', unsafe_allow_html=True)
     if not todas:
