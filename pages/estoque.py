@@ -152,8 +152,22 @@ def _ajuste():
         if not motivo.strip():
             st.error("Motivo obrigatório.")
         else:
-            da=abs(diff); tm="entrada" if diff>=0 else "saida"
-            registrar_movimentacao({"produto_id":prod["id"],"tipo":tm,"tipo_entrada":"Ajuste Manual","status":"concluido","quantidade_informada":da,"unidade_informada":prod["unidade_secundaria"],"quantidade_convertida":da,"observacao":f"[AJUSTE] {motivo.strip()}","usuario_executor":u["id"]})
+            da=abs(diff); direcao="entrada" if diff>=0 else "saida"
+            # tipo_saida=None garante que este ajuste NUNCA seja contabilizado como consumo:
+            # as queries de consumo (dashboard, previsão de demanda) filtram por
+            # tipo_saida="SOLICITADA" ou tipo_saida="MANUAL" — ajustes ficam de fora automaticamente.
+            registrar_movimentacao({
+                "produto_id":            prod["id"],
+                "tipo":                  direcao,          # necessário para o trigger de estoque
+                "tipo_entrada":          "Ajuste Manual",   # identifica como ajuste, nunca como consumo
+                "tipo_saida":            None,              # exclui das métricas de consumo/saída
+                "status":                "concluido",
+                "quantidade_informada":  da,
+                "unidade_informada":     prod["unidade_secundaria"],
+                "quantidade_convertida": da,
+                "observacao":            f"[AJUSTE] {motivo.strip()}",
+                "usuario_executor":      u["id"],
+            })
             st.session_state["ajuste_sucesso"]={"prod_id":prod["id"],"nome":prod["nome"],"nova":nova,"unidade":us_lbl}
             st.rerun()
     st.markdown("</div>",unsafe_allow_html=True)
