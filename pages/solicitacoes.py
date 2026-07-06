@@ -19,6 +19,7 @@ STATUS_COMPRA_OPCOES = [
     "Pedido de Compra Criado",
     "Aguardando Entrega",
     "Recebido",
+    "Cancelado",
 ]
 
 # Cores de badge por status de andamento
@@ -27,6 +28,7 @@ _COR_STATUS = {
     "Pedido de Compra Criado":   ("var(--warn)",  "📝"),
     "Aguardando Entrega":        ("var(--warn)",  "🚚"),
     "Recebido":                  ("var(--ok)",    "✅"),
+    "Cancelado":                  ("var(--ok)",    "❌"),
 }
 
 
@@ -586,6 +588,22 @@ def _compras_em_andamento():
                 st.success("📦 Recebimento confirmado! Item arquivado.")
                 st.rerun()
 
+        if novo_status == "Cancelado" or status_atual == "Cancelado":
+            confirmar_key = f"sc_recebido_{s['id']}"
+            if st.button(
+                "📦 Confirmar Cancelamento da Compra e Arquivar",
+                key=confirmar_key,
+                help="Marca como cancelado e remove da lista de andamento",
+            ):
+                atualizar_solicitacao_compra(s["id"], {
+                    "status_compra":      "Cancelado",
+                    "entrega_confirmada": False,
+                    "notificacao_status_lida": False,  # notifica usuário do recebimento
+                })
+                st.success("❌ Cancelamento confirmado! Solicitação arquivada.")
+                st.rerun()
+
+        
         st.markdown('<div class="div" style="margin:.4rem 0;"></div>', unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
