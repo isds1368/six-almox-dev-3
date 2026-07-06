@@ -9,7 +9,7 @@ from pages.auth import tela_login, tela_primeiro_acesso, tela_trocar_senha
 from pages.dashboard import tela_dashboard
 from pages.entrada import tela_entrada
 from pages.saidas import tela_solicitacoes, tela_saida_manual, tela_saida_aprovada
-from pages.solicitacoes import tela_solicitacoes_usuario, tela_solicitacoes_almoxarife
+from pages.solicitacoes import tela_solicitacoes_usuario, tela_solicitacoes_almoxarife, tela_solicitacoes_admin
 from pages.estoque import tela_estoque
 from pages.notas import tela_notas
 from pages.usuarios import tela_usuarios
@@ -64,14 +64,14 @@ def _rota_almoxarife(u):
         if st.button("Sair →",key="nav_sair"): st.session_state.clear(); st.rerun()
         st.markdown("</div>",unsafe_allow_html=True)
     st.markdown("</div>",unsafe_allow_html=True)
-    rotas={"dashboard":tela_dashboard,"entrada":tela_entrada,"solicitacoes":tela_solicitacoes_almoxarife,
+    rotas={"dashboard":tela_dashboard,"entrada":tela_entrada,"solicitacoes":tela_solicitacoes_admin,
            "saida_manual":tela_saida_manual,"saida_aprovada":tela_saida_aprovada,"estoque":tela_estoque,"notas":tela_notas}
     rotas.get(pagina,tela_dashboard)()
 
 def _rota_admin(u):
     pagina=pagina_atual()
     topbar(pagina,u)
-    rotas={"dashboard":tela_dashboard,"entrada":tela_entrada,"solicitacoes":tela_solicitacoes_almoxarife,
+    rotas={"dashboard":tela_dashboard,"entrada":tela_entrada,"solicitacoes":tela_solicitacoes_admin,
            "saida_manual":tela_saida_manual,"saida_aprovada":tela_saida_aprovada,"estoque":tela_estoque,
            "notas":tela_notas,"usuarios":tela_usuarios,"configuracoes":tela_configuracoes}
     rotas.get(pagina,tela_dashboard)()
