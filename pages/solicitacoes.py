@@ -4,7 +4,7 @@ from utils.database import (
     listar_produtos, listar_setores, registrar_movimentacao,
     listar_solicitacoes, atualizar_movimentacao, listar_notificacoes_usuario,
     estoque_disponivel, criar_solicitacao_compra, listar_solicitacoes_compra,
-    atualizar_solicitacao_compra,
+    atualizar_solicitacao_compra, listar_solicitacoes_unificadas, get_sb,
 )
 from utils.auth import sessao
 from utils.ui import badge
@@ -19,7 +19,6 @@ STATUS_COMPRA_OPCOES = [
     "Pedido de Compra Criado",
     "Aguardando Entrega",
     "Recebido",
-    "Cancelado",
 ]
 
 # Cores de badge por status de andamento
@@ -28,7 +27,6 @@ _COR_STATUS = {
     "Pedido de Compra Criado":   ("var(--warn)",  "📝"),
     "Aguardando Entrega":        ("var(--warn)",  "🚚"),
     "Recebido":                  ("var(--ok)",    "✅"),
-    "Cancelado":                  ("var(--ok)",    "❌"),
 }
 
 
@@ -588,22 +586,6 @@ def _compras_em_andamento():
                 st.success("📦 Recebimento confirmado! Item arquivado.")
                 st.rerun()
 
-        if novo_status == "Cancelado" or status_atual == "Cancelado":
-            confirmar_key = f"sc_recebido_{s['id']}"
-            if st.button(
-                "📦 Confirmar Cancelamento da Compra e Arquivar",
-                key=confirmar_key,
-                help="Marca como cancelado e remove da lista de andamento",
-            ):
-                atualizar_solicitacao_compra(s["id"], {
-                    "status_compra":      "Cancelado",
-                    "entrega_confirmada": False,
-                    "notificacao_status_lida": False,  # notifica usuário do recebimento
-                })
-                st.success("❌ Cancelamento confirmado! Solicitação arquivada.")
-                st.rerun()
-
-        
         st.markdown('<div class="div" style="margin:.4rem 0;"></div>', unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
@@ -686,33 +668,43 @@ def _popup_confirmacao(u):
                 st.error("Informe o motivo.")
                 return
 
+            ok = False
             if tipo == "compra":
                 dados = {
-                    "status":                  "aprovado" if acao == "aprovar" else "rejeitado",
-                    "usuario_autorizador":      u["id"],
-                    "data_autorizacao":         agora_iso(),
-                    "notificacao_compra_lida":  False,  # aciona notificação no app do usuário
+                    "status":                 "aprovado" if acao == "aprovar" else "rejeitado",
+                    "usuario_autorizador":     u["id"],
+                    "data_autorizacao":        agora_iso(),
+                    "notificacao_compra_lida": False,
                 }
                 if acao == "aprovar":
-                    dados["status_compra"]          = STATUS_COMPRA_OPCOES[0]
-                    dados["notificacao_status_lida"] = True  # sem notificação de status ainda
+                    dados["status_compra"]           = STATUS_COMPRA_OPCOES[0]
+                    dados["notificacao_status_lida"]  = True
                 if acao == "rejeitar":
                     dados["motivo_rejeicao"] = motivo_rej.strip()
-                atualizar_solicitacao_compra(conf["id"], dados)
+
+                sb = get_sb()
+                resp = sb.table("solicitacoes_compra").update(dados).eq("id", conf["id"]).execute()
+                ok = bool(resp and resp.data)
             else:
-                upd = {
+                dados = {
                     "status":              "aprovado" if acao == "aprovar" else "rejeitado",
                     "usuario_autorizador": u["id"],
                     "data_autorizacao":    agora_iso(),
                     "notificacao_lida":    False,
                 }
                 if acao == "rejeitar":
-                    upd["motivo_rejeicao"] = motivo_rej.strip()
-                atualizar_movimentacao(conf["id"], upd)
+                    dados["motivo_rejeicao"] = motivo_rej.strip()
 
-            st.success(f"{'✅ Aprovada' if acao == 'aprovar' else 'Rejeitada com motivo registrado'}!")
-            del st.session_state["conf_sol"]
-            st.rerun()
+                sb = get_sb()
+                resp = sb.table("movimentacoes").update(dados).eq("id", conf["id"]).execute()
+                ok = bool(resp and resp.data)
+
+            if ok:
+                st.success(f"{'✅ Aprovada' if acao == 'aprovar' else '❌ Rejeitada com motivo registrado'}!")
+                del st.session_state["conf_sol"]
+                st.rerun()
+            else:
+                st.error("❌ Não foi possível atualizar. Tente novamente ou verifique os logs.")
 
     with cn:
         if st.button("↩ Cancelar", use_container_width=True):
@@ -723,70 +715,54 @@ def _popup_confirmacao(u):
 # ── Histórico completo (almoxarife/admin) ────────────────────────────────────
 
 def _hist_completo():
-    # Histórico do almoxarifado
-    todas = listar_solicitacoes()
-    st.markdown('<div class="card"><div class="card-h">📋 Histórico — Almoxarifado</div>', unsafe_allow_html=True)
+    """Histórico unificado: almoxarifado + compras na mesma tabela, ordenados por data."""
+    todas = listar_solicitacoes_unificadas()
+
+    st.markdown('<div class="card"><div class="card-h">📋 Histórico — Todas as Solicitações</div>', unsafe_allow_html=True)
     if not todas:
-        st.info("Nenhuma solicitação de almoxarifado.")
+        st.info("Nenhuma solicitação registrada.")
     else:
         rows = ""
         for m in todas:
-            prod    = m.get("produto") or {}
-            b       = badge(m["status"].capitalize(), m["status"])
-            un_lbl  = sigla_para_opcao(m.get("unidade_informada", "UN"))
+            origem = m.get("origem", "almox")
+            b      = badge(m["status"].capitalize(), m["status"])
+            data   = datahora_br(m["criado_em"])
+            setor  = esc(m.get("setor_solicitante", "—"))
+            solicit = esc(m.get("nome_solicitante", "—"))
+
             motivo_html = ""
             if m.get("status") == "rejeitado" and m.get("motivo_rejeicao"):
                 motivo_html = (f'<br><span style="font-size:.7rem;color:var(--err);">'
                                f'💬 {esc_trunc(m["motivo_rejeicao"], 50)}</span>')
+
+            if origem == "almox":
+                prod   = m.get("produto") or {}
+                un_lbl = sigla_para_opcao(m.get("unidade_informada", "UN"))
+                tipo_badge = '<span style="font-size:.68rem;color:var(--t3);">🏪 Almox</span>'
+                descricao  = f'<strong>{esc(prod.get("nome","—"))}</strong>'
+                detalhe    = f'{qtd_br(m["quantidade_informada"])} {un_lbl}'
+            else:
+                cod        = esc(m.get("codigo_requisicao") or "—")
+                sc_status  = esc(m.get("status_compra") or "—")
+                tipo_badge = '<span style="font-size:.68rem;color:var(--info);">🛒 Compra</span>'
+                descricao  = f'<strong>{esc(m.get("produto_descricao","—"))}</strong>'
+                detalhe    = f'#{cod} · {sc_status}'
+
             rows += (
                 f'<tr>'
-                f'<td style="color:var(--t3);font-size:.73rem;">{datahora_br(m["criado_em"])}</td>'
-                f'<td><strong>{esc(prod.get("nome","—"))}</strong></td>'
-                f'<td>{qtd_br(m["quantidade_informada"])} {un_lbl}</td>'
-                f'<td>{esc(m.get("setor_solicitante","—"))}</td>'
-                f'<td>{esc(m.get("nome_solicitante","—"))}</td>'
+                f'<td style="color:var(--t3);font-size:.73rem;">{data}</td>'
+                f'<td>{tipo_badge}<br>{descricao}</td>'
+                f'<td style="font-size:.78rem;color:var(--t3);">{detalhe}</td>'
+                f'<td>{setor}</td>'
+                f'<td>{solicit}</td>'
                 f'<td>{b}{motivo_html}</td>'
                 f'</tr>'
             )
         st.markdown(
             f'<table class="tbl"><thead><tr>'
-            f'<th>Data</th><th>Produto</th><th>Qtd</th>'
+            f'<th>Data</th><th>Tipo / Produto</th><th>Detalhe</th>'
             f'<th>Setor</th><th>Solicitante</th><th>Status</th>'
             f'</tr></thead><tbody>{rows}</tbody></table>',
             unsafe_allow_html=True,
         )
     st.markdown("</div>", unsafe_allow_html=True)
-
-    # Histórico de solicitações de compra
-    with st.expander("📋 Histórico — Solicitações de Compra"):
-        sc_todas    = listar_solicitacoes_compra()
-        finalizadas = [s for s in sc_todas if s["status"] != "pendente"]
-        if not finalizadas:
-            st.info("Nenhuma finalizada.")
-        else:
-            rows = ""
-            for s in finalizadas:
-                b   = badge(s["status"].capitalize(), s["status"])
-                aut = (s.get("autorizador") or {}).get("nick", "—")
-                cod = esc(s.get("codigo_requisicao") or "—")
-                sc  = esc(s.get("status_compra") or "—")
-                rows += (
-                    f'<tr>'
-                    f'<td style="color:var(--t3);font-size:.73rem;">{datahora_br(s["criado_em"])}</td>'
-                    f'<td><span style="font-size:.72rem;color:var(--t3);">#{cod}</span></td>'
-                    f'<td><strong>{esc(s["produto_descricao"])}</strong></td>'
-                    f'<td>{esc(s.get("nome_solicitante","—"))}</td>'
-                    f'<td>{esc(s.get("setor_solicitante","—"))}</td>'
-                    f'<td>{aut}</td>'
-                    f'<td>{sc}</td>'
-                    f'<td>{b}</td>'
-                    f'</tr>'
-                )
-            st.markdown(
-                f'<table class="tbl"><thead><tr>'
-                f'<th>Data</th><th>Código</th><th>Produto</th>'
-                f'<th>Solicitante</th><th>Setor</th><th>Autorizador</th>'
-                f'<th>Andamento</th><th>Status</th>'
-                f'</tr></thead><tbody>{rows}</tbody></table>',
-                unsafe_allow_html=True,
-            )
