@@ -194,12 +194,13 @@ def _form_solicitar(u):
         un_lbl    = sigla_para_opcao(un_sec)
         disp      = estoque_disponivel(prod["id"])
         cor_est   = "var(--ok)" if disp > 0 else "var(--err)"
-        st.markdown(f"""
-        <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:7px;
-                    padding:.55rem .9rem;font-size:.82rem;margin:.4rem 0;">
-            📦 Saldo disponível: <strong style="color:{cor_est};">{qtd_br(disp)} {un_lbl}</strong>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:7px;'
+            f'padding:.55rem .9rem;font-size:.82rem;margin:.4rem 0;">'
+            f'📦 Saldo disponível: <strong style="color:{cor_est};">{qtd_br(disp)} {un_lbl}</strong>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
         qtd = st.number_input(f"Quantidade * ({un_lbl})", min_value=0.001, value=1.0, step=1.0, key="sol_qtd")
     with c2:
         setor  = st.selectbox("Setor *", sn, key="sol_setor")
@@ -347,19 +348,20 @@ def _minhas(u, sc_minhas: list):
                     f'💬 Motivo: {esc_trunc(s["motivo_rejeicao"], 60)}</span>'
                 )
 
-            st.markdown(f"""
-            <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;
-                        padding:.75rem 1rem;margin:.4rem 0;font-size:.83rem;">
-                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.4rem;">
-                    <span style="font-weight:700;">{prod}</span>
-                    <span style="font-size:.72rem;color:var(--t3);">#{cod}</span>
-                </div>
-                <div style="color:var(--t3);font-size:.75rem;margin:.15rem 0 .3rem 0;">
-                    {setor} &nbsp;·&nbsp; {data}
-                </div>
-                <div>{b}{andamento_html}{motivo_html}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(
+                f'<div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;'
+                f'padding:.75rem 1rem;margin:.4rem 0;font-size:.83rem;">'
+                f'<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.4rem;">'
+                f'<span style="font-weight:700;">{prod}</span>'
+                f'<span style="font-size:.72rem;color:var(--t3);">#{cod}</span>'
+                f'</div>'
+                f'<div style="color:var(--t3);font-size:.75rem;margin:.15rem 0 .3rem 0;">'
+                f'{setor} &nbsp;·&nbsp; {data}'
+                f'</div>'
+                f'<div>{b}{andamento_html}{motivo_html}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -672,19 +674,20 @@ def _popup_confirmacao(u):
     tipo_lbl = "Solicitação de Compra" if tipo == "compra" else "Solicitação ao Almoxarifado"
     qtd_info = f"<b>Qtd:</b> {conf['qtd']} {conf['un']}<br>" if conf.get("qtd") else ""
 
-    st.markdown(f"""
-    <div style="background:{cor};border:2px solid {borda};border-radius:10px;
-                padding:1.2rem 1.5rem;margin:1rem 0;">
-        <div style="font-size:1rem;font-weight:700;margin-bottom:.6rem;">
-            {emoji} Confirmar {titulo} — {tipo_lbl}
-        </div>
-        <div style="font-size:.85rem;color:var(--t2);line-height:1.8;">
-            <b>Produto:</b> {esc(conf['prod'])}<br>
-            {qtd_info}
-            <b>Solicitante:</b> {esc(conf['nick'])}
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="background:{cor};border:2px solid {borda};border-radius:10px;'
+        f'padding:1.2rem 1.5rem;margin:1rem 0;">'
+        f'<div style="font-size:1rem;font-weight:700;margin-bottom:.6rem;">'
+        f'{emoji} Confirmar {titulo} — {tipo_lbl}'
+        f'</div>'
+        f'<div style="font-size:.85rem;color:var(--t2);line-height:1.8;">'
+        f'<b>Produto:</b> {esc(conf["prod"])}<br>'
+        f'{qtd_info}'
+        f'<b>Solicitante:</b> {esc(conf["nick"])}'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
     motivo_rej = ""
     if acao == "rejeitar":
