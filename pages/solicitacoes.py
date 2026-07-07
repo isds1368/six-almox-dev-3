@@ -575,14 +575,15 @@ def _compras_em_andamento():
         with c5:
             if st.button("💾", key=f"sc_save_{s['id']}", help="Salvar alterações"):
                 status_mudou = novo_status != status_atual
-                atualizar_solicitacao_compra(s["id"], {
+                ok = atualizar_solicitacao_compra(s["id"], {
                     "status_compra":         novo_status,
                     "obs_compra":            nova_obs.strip() or None,
                     # Dispara notificação ao usuário se o status mudou
                     "notificacao_status_lida": False if status_mudou else s.get("notificacao_status_lida", True),
                 })
-                st.toast("✅ Atualizado!" if not status_mudou else "✅ Status atualizado! Usuário será notificado.")
-                st.rerun()
+                if ok:
+                    st.toast("✅ Atualizado!" if not status_mudou else "✅ Status atualizado! Usuário será notificado.")
+                    st.rerun()
 
         # Botão de confirmar recebimento — aparece apenas quando status = "Recebido"
         if novo_status == "Recebido" or status_atual == "Recebido":
@@ -592,13 +593,14 @@ def _compras_em_andamento():
                 key=confirmar_key,
                 help="Marca como concluído e remove da lista de andamento",
             ):
-                atualizar_solicitacao_compra(s["id"], {
+                ok = atualizar_solicitacao_compra(s["id"], {
                     "status_compra":      "Recebido",
                     "entrega_confirmada": True,
                     "notificacao_status_lida": False,  # notifica usuário do recebimento
                 })
-                st.success("📦 Recebimento confirmado! Item arquivado.")
-                st.rerun()
+                if ok:
+                    st.success("📦 Recebimento confirmado! Item arquivado.")
+                    st.rerun()
 
         # Botão de confirmar cancelamento — aparece apenas quando status = "Cancelado"
         if novo_status == "Cancelado" or status_atual == "Cancelado":
@@ -608,13 +610,14 @@ def _compras_em_andamento():
                 key=cancelar_key,
                 help="Marca como cancelado e remove da lista de andamento",
             ):
-                atualizar_solicitacao_compra(s["id"], {
+                ok = atualizar_solicitacao_compra(s["id"], {
                     "status_compra":      "Cancelado",
                     "entrega_confirmada": True,
                     "notificacao_status_lida": False,  # notifica usuário do cancelamento
                 })
-                st.success("🚫 Cancelamento confirmado! Item arquivado.")
-                st.rerun()
+                if ok:
+                    st.success("🚫 Cancelamento confirmado! Item arquivado.")
+                    st.rerun()
 
         st.markdown('<div class="div" style="margin:.4rem 0;"></div>', unsafe_allow_html=True)
 
