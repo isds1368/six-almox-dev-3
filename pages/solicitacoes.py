@@ -29,6 +29,7 @@ STATUS_COMPRA_OPCOES = [
     "Pedido de Compra Criado",
     "Aguardando Entrega",
     "Recebido",
+    "Cancelado",
 ]
 
 # Cores de badge por status de andamento
@@ -37,6 +38,7 @@ _COR_STATUS = {
     "Pedido de Compra Criado":   ("var(--warn)",  "📝"),
     "Aguardando Entrega":        ("var(--warn)",  "🚚"),
     "Recebido":                  ("var(--ok)",    "✅"),
+    "Cancelado":                 ("var(--err)",   "🚫"),
 }
 
 
@@ -596,6 +598,22 @@ def _compras_em_andamento():
                 st.success("📦 Recebimento confirmado! Item arquivado.")
                 st.rerun()
 
+        # Botão de confirmar cancelamento — aparece apenas quando status = "Cancelado"
+        if novo_status == "Cancelado" or status_atual == "Cancelado":
+            cancelar_key = f"sc_cancelado_{s['id']}"
+            if st.button(
+                "🚫 Confirmar Cancelamento e Arquivar",
+                key=cancelar_key,
+                help="Marca como cancelado e remove da lista de andamento",
+            ):
+                atualizar_solicitacao_compra(s["id"], {
+                    "status_compra":      "Cancelado",
+                    "entrega_confirmada": True,
+                    "notificacao_status_lida": False,  # notifica usuário do cancelamento
+                })
+                st.success("🚫 Cancelamento confirmado! Item arquivado.")
+                st.rerun()
+
         st.markdown('<div class="div" style="margin:.4rem 0;"></div>', unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
@@ -603,17 +621,18 @@ def _compras_em_andamento():
 
 
 def _hist_compras_arquivadas(sc_todas: list):
-    """Expander com histórico das compras já arquivadas (entrega confirmada)."""
+    """Expander com histórico das compras já arquivadas (entrega confirmada ou canceladas)."""
     arquivadas = [s for s in sc_todas if s.get("entrega_confirmada", False)]
-    with st.expander(f"📁 Histórico — Entregas Confirmadas ({len(arquivadas)})"):
+    with st.expander(f"📁 Histórico — Compras Finalizadas ({len(arquivadas)})"):
         if not arquivadas:
-            st.info("Nenhuma entrega confirmada ainda.")
+            st.info("Nenhuma compra finalizada ainda.")
             return
         rows = ""
         for s in arquivadas:
             cod  = esc(s.get("codigo_requisicao") or "—")
             aut  = (s.get("autorizador") or {}).get("nick", "—")
             obs_c = esc_trunc(s.get("obs_compra") or "—", 40)
+            status_final = s.get("status_compra") or "Recebido"
             rows += (
                 f'<tr>'
                 f'<td style="color:var(--t3);font-size:.73rem;">{datahora_br(s["criado_em"])}</td>'
@@ -623,7 +642,7 @@ def _hist_compras_arquivadas(sc_todas: list):
                 f'<td>{esc(s.get("setor_solicitante","—"))}</td>'
                 f'<td>{aut}</td>'
                 f'<td>{obs_c}</td>'
-                f'<td>{_badge_status_compra("Recebido")}</td>'
+                f'<td>{_badge_status_compra(status_final)}</td>'
                 f'</tr>'
             )
         st.markdown(
