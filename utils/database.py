@@ -387,11 +387,14 @@ def criar_solicitacao_compra(dados: dict) -> dict:
         st.error("❌ Erro ao registrar solicitação de compra.")
         st.stop()
 
-def atualizar_solicitacao_compra(scid: str, dados: dict):
-    try: get_sb().table("solicitacoes_compra").update(dados).eq("id", scid).execute()
+def atualizar_solicitacao_compra(scid: str, dados: dict) -> bool:
+    try:
+        resp = get_sb().table("solicitacoes_compra").update(dados).eq("id", scid).execute()
+        return bool(resp and resp.data)
     except Exception as e:
         _log.error("atualizar_solicitacao_compra: %s", e)
         st.error("❌ Erro ao atualizar solicitação de compra.")
+        return False
 
 def listar_solicitacoes_unificadas(status=None) -> list:
     """
