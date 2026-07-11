@@ -57,25 +57,25 @@ def _badge_status_compra(status: str) -> str:
 def tela_solicitacoes_usuario():
     u = sessao()
     st.markdown('<div class="pg">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="pg-title">📋 Solicitações</div>'
-        '<div class="pg-sub">Faça pedidos ao almoxarifado ou solicite compra de produtos</div>',
-        unsafe_allow_html=True,
-    )
-
-    # ── Notificações: aprovação de itens do almoxarifado ──────────────────────
+    st.markdown('<div class="pg-title">📋 Solicitações</div>'
+                '<div class="pg-sub">Faça pedidos ao almoxarifado e acompanhe seus status</div>',
+                unsafe_allow_html=True)
+ 
+    # Notificações de aprovação
     notifs = listar_notificacoes_usuario(u["nick"])
     for n in notifs:
         prod = (n.get("produto") or {}).get("nome", "—")
         un   = sigla_para_opcao(n.get("unidade_informada", "UN"))
-        st.success(
-            f"🔔 **Aprovada!** {qtd_br(n['quantidade_informada'])} {un} de **{prod}** "
-            f"está reservado e pronto para retirada."
-        )
+        st.success(f"🔔 **Aprovada!** {qtd_br(n['quantidade_informada'])} {un} de **{prod}** está reservado e pronto para retirada.")
         if st.button("✅ Entendido", key=f"notif_{n['id']}"):
             try: atualizar_movimentacao(n["id"], {"notificacao_lida": True})
             except: pass
             st.rerun()
+ 
+    t1, t2 = st.tabs(["Solicitação ao Almoxarifado", "Minhas Solicitações"])
+    with t1: _form_solicitar(u)
+    with t2: _minhas(u)
+    st.markdown("</div>", unsafe_allow_html=True)
 
     # ── Notificações: aprovação / rejeição de compra ──────────────────────────
     sc_todas  = listar_solicitacoes_compra()
