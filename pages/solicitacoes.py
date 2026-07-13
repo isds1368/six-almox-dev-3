@@ -112,10 +112,9 @@ def tela_solicitacoes_usuario():
                 except: pass
                 st.rerun()
 
-    t1, t2, t3 = st.tabs(["Solicitação ao Almoxarifado", "Solicitação de Compra", "Minhas Solicitações"])
+    t1, t2 = st.tabs(["Solicitação ao Almoxarifado", "Minhas Solicitações"])
     with t1: _form_solicitar(u)
-    with t2: _form_compra(u)
-    with t3: _minhas(u, sc_minhas)
+    with t2: _minhas(u, sc_minhas)
     st.markdown("</div>", unsafe_allow_html=True)
 
 
