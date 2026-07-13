@@ -72,11 +72,6 @@ def tela_solicitacoes_usuario():
             except: pass
             st.rerun()
  
-    t1, t2 = st.tabs(["Solicitação ao Almoxarifado", "Minhas Solicitações"])
-    with t1: _form_solicitar(u)
-    with t2: _minhas(u)
-    st.markdown("</div>", unsafe_allow_html=True)
-
     # ── Notificações: aprovação / rejeição de compra ──────────────────────────
     sc_todas  = listar_solicitacoes_compra()
     sc_minhas = [s for s in sc_todas if s.get("nick_solicitante") == u["nick"]]
