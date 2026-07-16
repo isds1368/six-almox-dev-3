@@ -167,7 +167,8 @@ def _recentes(r):
     else:
         rows = ""
         for m in movs:
-            prod   = (m.get("produtos") or {}).get("nome","—")
+            prod_info = m.get("produtos") or m.get("produto") or {}
+            prod   = prod_info.get("nome") or m.get("produto_nome") or "—"
             setor  = m.get("setor_solicitante") or "—"
             cor    = "var(--ok)" if m["tipo"] == "entrada" else "var(--err)"
             sinal  = "+" if m["tipo"] == "entrada" else "-"
