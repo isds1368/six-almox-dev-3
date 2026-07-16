@@ -414,6 +414,7 @@ def tela_saida_aprovada():
     st.markdown('<div class="pg">', unsafe_allow_html=True)
     st.markdown('<div class="pg-title">✅ Saída Aprovada</div><div class="pg-sub">Execute baixas de solicitações aprovadas</div>', unsafe_allow_html=True)
     u = sessao(); aprov = listar_solicitacoes("aprovado")
+    conf_canc = st.session_state.get("conf_canc_saida")
     st.markdown('<div class="card"><div class="card-h">📋 Aguardando Execução</div>', unsafe_allow_html=True)
     if not aprov:
         st.markdown('<p style="color:var(--t3);font-size:.82rem;">Nenhuma saída aprovada pendente.</p>', unsafe_allow_html=True)
@@ -435,8 +436,47 @@ def tela_saida_aprovada():
                         atualizar_movimentacao(s["id"],{"status":"concluido","usuario_executor":u["id"],"data_movimentacao":agora_iso()})
                         st.success("✅ Baixa executada!"); st.rerun()
                     else: st.error("Estoque insuficiente.")
+                if st.button("✖️ Cancelar", key=f"cn_{s['id']}", use_container_width=True):
+                    st.session_state["conf_canc_saida"] = {
+                        "id": s["id"], "prod": prod.get("nome","—"),
+                        "qtd": qtd_br(s["quantidade_informada"]), "un": un_lbl,
+                        "nick": s.get("nome_solicitante","—"),
+                    }
+                    st.rerun()
             st.markdown('<div class="div"></div>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
+
+    if conf_canc:
+        st.markdown(
+            f'<div style="background:var(--err-bg);border:2px solid rgba(220,38,38,.3);border-radius:10px;'
+            f'padding:1.2rem 1.5rem;margin:1rem 0;">'
+            f'<div style="font-size:1rem;font-weight:700;margin-bottom:.6rem;">✖️ Confirmar Cancelamento da Retirada</div>'
+            f'<div style="font-size:.85rem;color:var(--t2);line-height:1.8;">'
+            f'<b>Produto:</b> {esc(conf_canc["prod"])}<br>'
+            f'<b>Qtd:</b> {conf_canc["qtd"]} {conf_canc["un"]}<br>'
+            f'<b>Retirante:</b> {esc(conf_canc["nick"])}</div></div>',
+            unsafe_allow_html=True,
+        )
+        motivo_canc = st.text_area("Motivo do cancelamento *", key="mcanc_saida")
+        cs, cn, _ = st.columns([1,1,4])
+        with cs:
+            if st.button("✖️ SIM, cancelar", type="primary", use_container_width=True, key="conf_canc_sim"):
+                if not motivo_canc.strip():
+                    st.error("Informe o motivo do cancelamento.")
+                else:
+                    atualizar_movimentacao(conf_canc["id"], {
+                        "status": "cancelado",
+                        "usuario_executor": u["id"],
+                        "data_movimentacao": agora_iso(),
+                        "motivo_rejeicao": motivo_canc.strip(),
+                    })
+                    del st.session_state["conf_canc_saida"]
+                    st.success("✅ Reserva cancelada — o valor voltou a ficar disponível no estoque.")
+                    st.rerun()
+        with cn:
+            if st.button("↩ Voltar", use_container_width=True, key="conf_canc_nao"):
+                del st.session_state["conf_canc_saida"]; st.rerun()
+
     with st.expander("Histórico de saídas aprovadas"):
         conc = listar_solicitacoes("concluido")
         if not conc: st.info("Nenhum.")
