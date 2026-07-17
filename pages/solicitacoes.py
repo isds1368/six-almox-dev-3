@@ -187,11 +187,19 @@ def _form_solicitar(u):
         un_sec    = prod.get("unidade_secundaria", "UN")
         un_lbl    = sigla_para_opcao(un_sec)
         disp      = estoque_disponivel(prod["id"])
+        bruto     = float(prod.get("quantidade_total_secundaria", 0))
+        reservado = max(0.0, bruto - disp)
         cor_est   = "var(--ok)" if disp > 0 else "var(--err)"
+        linha_reservado = (
+            f'🔒 Reservado (aguardando retirada): <strong style="color:var(--warn);">{qtd_br(reservado)} {un_lbl}</strong><br>'
+            if reservado > 0 else ""
+        )
         st.markdown(
             f'<div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:7px;'
-            f'padding:.55rem .9rem;font-size:.82rem;margin:.4rem 0;">'
-            f'📦 Saldo disponível: <strong style="color:{cor_est};">{qtd_br(disp)} {un_lbl}</strong>'
+            f'padding:.55rem .9rem;font-size:.82rem;margin:.4rem 0;line-height:1.7;">'
+            f'📦 Estoque total: <strong>{qtd_br(bruto)} {un_lbl}</strong><br>'
+            f'{linha_reservado}'
+            f'✅ Saldo disponível para solicitar: <strong style="color:{cor_est};">{qtd_br(disp)} {un_lbl}</strong>'
             f'</div>',
             unsafe_allow_html=True,
         )
