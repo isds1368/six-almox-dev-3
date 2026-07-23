@@ -2,8 +2,8 @@
 import streamlit as st, datetime
 import plotly.graph_objects as go
 from utils.database import (listar_produtos, listar_categorias, atualizar_produto,
-    registrar_movimentacao, listar_movimentacoes, historico_produto)
-from utils.auth import sessao, is_admin
+    registrar_movimentacao, listar_movimentacoes, historico_produto, listar_solicitacoes)
+from utils.auth import sessao, is_admin, is_almoxarife
 from utils.ui import badge, status_estoque, kpi_html
 from utils.fmt import qtd_br, datahora_br
 from utils.unidades import SIGLAS, OPCOES, sigla_para_opcao, opcao_para_sigla
@@ -35,6 +35,13 @@ def tela_estoque():
 def _inv():
     prods=listar_produtos(); cats=listar_categorias()
     if not prods: st.info("Nenhum produto."); return
+    ver_reserva=is_almoxarife()
+    reservas={}
+    if ver_reserva:
+        for s in listar_solicitacoes():
+            if s.get("status") in ("pendente","aprovado"):
+                pid=(s.get("produto") or {}).get("id")
+                if pid: reservas[pid]=reservas.get(pid,0.0)+float(s.get("quantidade_convertida") or 0)
     c1,c2,c3=st.columns([3,2,2])
     with c1: busca=st.text_input("🔍 Buscar",key="eb2")
     with c2: cf=st.selectbox("Categoria",["Todas"]+[c["nome"] for c in cats])
@@ -80,7 +87,9 @@ def _inv():
         est=float(p["quantidade_total_secundaria"]); minp=float(p["estoque_minimo_primario"]); fat=float(p["fator_conversao"])
         estp=est/fat if fat else 0; txt,cls=status_estoque(est,minp,fat)
         cat=(p.get("categorias") or {}).get("nome","—"); up_lbl=sigla_para_opcao(p["unidade_primaria"]); us_lbl=sigla_para_opcao(p["unidade_secundaria"])
-        rows+=f'<tr><td><strong>{p["nome"]}</strong></td><td class="mono">{p["codigo_interno"]}</td><td class="mono" style="color:var(--t4);">{p.get("ean") or "—"}</td><td style="color:var(--t3);">{cat}</td><td><strong>{qtd_br(est)} {us_lbl}</strong><br><span style="font-size:.71rem;color:var(--t3);">= {qtd_br(estp)} {up_lbl}</span></td><td style="color:var(--t3);">{qtd_br(minp)} {up_lbl}</td><td>{badge(txt,cls)}</td></tr>'
+        res_qtd=reservas.get(p["id"],0.0) if ver_reserva else 0.0
+        res_html=f'<br><span style="font-size:.7rem;color:var(--warn);font-weight:600;">🔒 Reservado: {qtd_br(res_qtd)} {us_lbl}</span>' if res_qtd>0 else ''
+        rows+=f'<tr><td><strong>{p["nome"]}</strong></td><td class="mono">{p["codigo_interno"]}</td><td class="mono" style="color:var(--t4);">{p.get("ean") or "—"}</td><td style="color:var(--t3);">{cat}</td><td><strong>{qtd_br(est)} {us_lbl}</strong><br><span style="font-size:.71rem;color:var(--t3);">= {qtd_br(estp)} {up_lbl}</span>{res_html}</td><td style="color:var(--t3);">{qtd_br(minp)} {up_lbl}</td><td>{badge(txt,cls)}</td></tr>'
     vz='<tr><td colspan="7" style="text-align:center;color:var(--t3);padding:2rem;">Nenhum resultado</td></tr>'
     st.markdown(f'<table class="tbl"><thead><tr><th>Produto</th><th>Código</th><th>EAN</th><th>Categoria</th><th>Estoque</th><th>Mínimo</th><th>Status</th></tr></thead><tbody>{rows or vz}</tbody></table>',unsafe_allow_html=True)
 
