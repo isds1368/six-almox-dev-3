@@ -6,7 +6,7 @@ Ponto de entrada usado pelo app.py: tela_controle()
 """
 from dataclasses import dataclass, field
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, date
 import io
 
 import streamlit as st
@@ -25,6 +25,9 @@ SETOR_NOMES = {
 }
 SETOR_IDS = list(SETOR_NOMES.keys())
 
+# Setor especial para onde equipamentos quebrados são movidos automaticamente
+SETOR_PLANEJAMENTO = "plan"
+
 # ── Status possíveis e cor associada (usada nos badges e no rastro) ─────
 STATUS_CORES = {
     "Recebido": "#22c55e",
@@ -37,10 +40,19 @@ STATUS_CORES = {
     "Descartado": "#6b7280",
 }
 STATUS_LIST = list(STATUS_CORES.keys())
-# Subconjunto mostrado na legenda enxuta do mapa (igual à referência visual)
-STATUS_LEGENDA = ["Recebido", "Em uso", "Em traslado", "Quebrado", "Substituído"]
+
+# Status que força setor = Planejamento e exige motivo em texto livre
+STATUS_QUEBRA = "Quebrado"
 
 SITUACOES = ["Ativo", "Inativo", "Baixado"]
+
+# ── Condição de uso do equipamento no setor onde está ───────────────────
+CONDICAO_FIXO = "Fixo"
+CONDICAO_EMPRESTIMO = "Empréstimo"
+CONDICOES = [CONDICAO_FIXO, CONDICAO_EMPRESTIMO]
+
+# Perfis com permissão para registrar entrada/saída/movimentação de equipamentos
+PERFIS_COM_EDICAO = ("almoxarife", "admin", "administrador")
 
 
 @dataclass
@@ -52,13 +64,15 @@ class EventoHistorico:
     setor_novo: str
     usuario: str
     observacao: str = ""
+    condicao: Optional[str] = None            # "Fixo" | "Empréstimo" | None
+    devolucao_prevista: Optional[str] = None  # só relevante quando condicao == Empréstimo
 
 
 @dataclass
 class Equipamento:
     id: str
     numero_serie: str
-    descricao: str
+    descricao: str = ""
     fabricante: str = ""
     modelo: str = ""
     tipo: str = ""
@@ -72,6 +86,9 @@ class Equipamento:
     situacao: str = "Ativo"
     status: str = "Recebido"
     setor: str = "entrada"
+    setor_fixo: Optional[str] = None          # setor "dono" do equipamento (definido pelo Planejamento)
+    condicao: str = CONDICAO_FIXO             # condição de uso no setor atual
+    devolucao_prevista: Optional[str] = None  # data prevista de devolução ao setor_fixo (se emprestado)
     historico: List[EventoHistorico] = field(default_factory=list)
 
 
@@ -126,70 +143,114 @@ class EquipamentoService:
         self.repo = repo or EquipamentoRepository()
 
     # ── CONSULTAS ────────────────────────────────────────────────────
-    def listar(self):
+    def listar(self) -> List[Equipamento]:
         return self.repo.listar()
 
-    def buscar(self, equipamento_id: str):
+    def buscar(self, equipamento_id: str) -> Optional[Equipamento]:
         return self.repo.buscar(equipamento_id)
 
-    def por_setor(self, setor_id: str):
+    def buscar_por_serie(self, numero_serie: str) -> Optional[Equipamento]:
+        numero_serie = (numero_serie or "").strip().lower()
+        for e in self.listar():
+            if e.numero_serie.strip().lower() == numero_serie:
+                return e
+        return None
+
+    def por_setor(self, setor_id: str) -> List[Equipamento]:
         return [e for e in self.listar() if e.setor == setor_id and e.situacao != "Baixado"]
 
-    # ── CRIAÇÃO (equivale ao "Recebimento") ─────────────────────────
-    def criar_equipamento(self, dados: dict, usuario: str) -> Equipamento:
-        equip = Equipamento(
-            id=self.repo.proximo_id(),
-            numero_serie=dados["numero_serie"],
-            descricao=dados["descricao"],
-            fabricante=dados.get("fabricante", ""),
-            modelo=dados.get("modelo", ""),
-            tipo=dados.get("tipo", ""),
-            categoria=dados.get("categoria", ""),
-            patrimonio=dados.get("patrimonio", ""),
-            proprio_ou_alugado=dados.get("proprio_ou_alugado", "Próprio"),
-            fornecedor=dados.get("fornecedor", ""),
-            data_aquisicao=dados.get("data_aquisicao", ""),
-            garantia_ate=dados.get("garantia_ate", ""),
-            observacoes=dados.get("observacoes", ""),
-            situacao="Ativo",
-            status="Recebido",
-            setor="entrada",
-        )
+    def emprestimos_pendentes(self) -> List[Equipamento]:
+        return [e for e in self.listar() if e.condicao == CONDICAO_EMPRESTIMO and e.devolucao_prevista]
+
+    # ── CADASTRO EM LOTE (entrada — só Planejamento/Controladoria) ──
+    # Regra: nunca recadastra um número de série já existente — em vez
+    # disso, alimenta um NOVO ciclo no histórico do equipamento já
+    # existente (isso é o que sustenta os indicadores de SLA de uso).
+    def cadastrar_lote(self, numeros_serie: List[str], tipo: str, descricao: str,
+                        acesso: str, setor_destino: str, usuario: str) -> dict:
+        criados, reabertos, ignorados = [], [], []
+        for bruto in numeros_serie:
+            numero = (bruto or "").strip()
+            if not numero:
+                continue
+            existente = self.buscar_por_serie(numero)
+            if existente:
+                self._registrar_novo_ciclo(existente, setor_destino, usuario)
+                reabertos.append(existente)
+            else:
+                novo = Equipamento(
+                    id=self.repo.proximo_id(), numero_serie=numero, descricao=descricao,
+                    tipo=tipo, proprio_ou_alugado=acesso, situacao="Ativo",
+                    status="Recebido", setor=setor_destino, setor_fixo=setor_destino,
+                    condicao=CONDICAO_FIXO,
+                )
+                evento = EventoHistorico(
+                    data_hora=self.repo.agora(), status_anterior=None, status_novo="Recebido",
+                    setor_anterior=None, setor_novo=setor_destino, usuario=usuario,
+                    observacao="Equipamento recebido e designado pelo Planejamento.",
+                    condicao=CONDICAO_FIXO,
+                )
+                self.repo.registrar_evento(novo, evento)
+                criados.append(novo)
+        return {"criados": criados, "reabertos": reabertos, "ignorados": ignorados}
+
+    def _registrar_novo_ciclo(self, equip: Equipamento, setor_destino: str, usuario: str):
+        """Equipamento que já existia (saiu e voltou à empresa) — mantém
+        o histórico completo, só acrescenta um novo evento de entrada."""
         evento = EventoHistorico(
-            data_hora=self.repo.agora(),
-            status_anterior=None,
-            status_novo="Recebido",
-            setor_anterior=None,
-            setor_novo="entrada",
-            usuario=usuario,
-            observacao="Equipamento recebido no almoxarifado.",
+            data_hora=self.repo.agora(), status_anterior=equip.status, status_novo="Recebido",
+            setor_anterior=equip.setor, setor_novo=setor_destino, usuario=usuario,
+            observacao="Novo ciclo de entrada registrado pelo Planejamento (equipamento já existente).",
+            condicao=CONDICAO_FIXO,
         )
+        equip.status = "Recebido"
+        equip.setor = setor_destino
+        equip.setor_fixo = setor_destino
+        equip.condicao = CONDICAO_FIXO
+        equip.devolucao_prevista = None
+        equip.situacao = "Ativo"
+        self.repo.registrar_evento(equip, evento)
+
+    # ── TRANSIÇÃO DE STATUS (via painel "Atualizar status") ─────────
+    def alterar_status(self, equip: Equipamento, novo_status: str, novo_setor: str,
+                        usuario: str, observacao: str = ""):
+        # Regra: equipamento quebrado vai automaticamente para o Planejamento,
+        # não importa em qual setor foi apontado como quebrado.
+        if novo_status == STATUS_QUEBRA:
+            novo_setor = SETOR_PLANEJAMENTO
+
+        status_anterior, setor_anterior = equip.status, equip.setor
+        evento = EventoHistorico(
+            data_hora=self.repo.agora(), status_anterior=status_anterior, status_novo=novo_status,
+            setor_anterior=setor_anterior, setor_novo=novo_setor, usuario=usuario, observacao=observacao,
+        )
+        equip.status = novo_status
+        equip.setor = novo_setor
+        if novo_status == "Descartado":
+            equip.situacao = "Baixado"
         self.repo.registrar_evento(equip, evento)
         return equip
 
-    # ── TRANSIÇÃO DE STATUS/SETOR/SITUAÇÃO ──────────────────────────
-    def alterar_status(self, equip: Equipamento, novo_status: str, novo_setor: str,
-                        usuario: str, observacao: str = "", nova_situacao: Optional[str] = None):
-        status_anterior = equip.status
-        setor_anterior = equip.setor
+    # ── "INFORMAR EQUIPAMENTO NESTE SETOR" (fluxo do clique no mapa) ─
+    def setor_diverge_do_fixo(self, equip: Equipamento, setor_destino: str) -> bool:
+        return bool(equip.setor_fixo) and equip.setor_fixo != setor_destino
 
+    def informar_equipamento_no_setor(self, equip: Equipamento, setor_destino: str, usuario: str,
+                                       condicao: str = CONDICAO_FIXO,
+                                       devolucao_prevista: Optional[str] = None, observacao: str = ""):
+        status_anterior, setor_anterior = equip.status, equip.setor
         evento = EventoHistorico(
-            data_hora=self.repo.agora(),
-            status_anterior=status_anterior,
-            status_novo=novo_status,
-            setor_anterior=setor_anterior,
-            setor_novo=novo_setor,
-            usuario=usuario,
-            observacao=observacao,
+            data_hora=self.repo.agora(), status_anterior=status_anterior, status_novo="Em uso",
+            setor_anterior=setor_anterior, setor_novo=setor_destino, usuario=usuario,
+            observacao=observacao, condicao=condicao,
+            devolucao_prevista=devolucao_prevista if condicao == CONDICAO_EMPRESTIMO else None,
         )
-
-        equip.status = novo_status
-        equip.setor = novo_setor
-        if nova_situacao:
-            equip.situacao = nova_situacao
-        if novo_status == "Descartado":
-            equip.situacao = "Baixado"
-
+        equip.status = "Em uso"
+        equip.setor = setor_destino
+        equip.condicao = condicao
+        equip.devolucao_prevista = devolucao_prevista if condicao == CONDICAO_EMPRESTIMO else None
+        if condicao == CONDICAO_FIXO:
+            equip.setor_fixo = setor_destino  # reatribuição de propriedade do equipamento
         self.repo.registrar_evento(equip, evento)
         return equip
 
@@ -201,22 +262,18 @@ _service = EquipamentoService()
 
 # ============================================================
 # CSS — tema premium (fundo preto, neon vermelho, glass, glow)
-# Classes com prefixo "ct-" para não colidir com o CSS do resto do sistema.
 # ============================================================
 _CSS = """<style>
-.ct-wrap{--ct-red:#ef4444;--ct-red-d:#b91c1c;--ct-bg:#050506;--ct-glass:rgba(18,8,8,.55);
---ct-bdr:rgba(239,68,68,.5);font-family:'Plus Jakarta Sans',sans-serif;}
+.ct-wrap{--ct-red:#ef4444;--ct-bg:#050506;--ct-glass:rgba(18,8,8,.55);--ct-bdr:rgba(239,68,68,.5);
+font-family:'Plus Jakarta Sans',sans-serif;}
 .ct-wrap .ct-title{font-size:1.15rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;
 color:#fff;text-shadow:0 0 12px rgba(239,68,68,.65);margin-bottom:.15rem;}
 .ct-wrap .ct-sub{font-size:.72rem;color:#9a9a9a;margin-bottom:1rem;}
 .ct-wrap .ct-card{background:var(--ct-glass);border:1.5px solid var(--ct-bdr);border-radius:12px;
 padding:1rem 1.1rem;margin-bottom:.9rem;backdrop-filter:blur(6px);box-shadow:0 0 16px rgba(239,68,68,.14);}
 .ct-wrap .ct-card-h{font-size:.72rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;
-color:var(--ct-red);margin-bottom:.7rem;padding-bottom:.45rem;border-bottom:1px solid var(--ct-bdr);
-display:flex;align-items:center;justify-content:space-between;}
+color:var(--ct-red);margin-bottom:.7rem;padding-bottom:.45rem;border-bottom:1px solid var(--ct-bdr);}
 .ct-wrap .ct-card-sub{font-size:.68rem;color:#888;margin-top:-.5rem;margin-bottom:.7rem;}
-
-/* setores do mapa — contorno neon, transparente por dentro */
 .ct-wrap .setor-btn{background:rgba(20,4,4,.35);border:1.5px solid var(--ct-bdr);border-radius:8px;
 margin-bottom:.55rem;transition:box-shadow .25s,border-color .25s,background .25s;
 box-shadow:0 0 10px rgba(239,68,68,.18) inset;}
@@ -227,29 +284,44 @@ border-color:#ff5b5b;background:rgba(239,68,68,.1);}
 color:#fff!important;font-weight:700!important;letter-spacing:.1em!important;text-transform:uppercase!important;
 font-size:.76rem!important;height:64px!important;width:100%!important;}
 .ct-wrap .setor-tall [data-testid="stButton"] button{height:290px!important;}
-
-/* KPIs do resumo geral */
 .ct-wrap .ct-kpi-row{display:flex;gap:.7rem;flex-wrap:wrap;}
-.ct-wrap .ct-kpi{flex:1;min-width:90px;text-align:center;}
+.ct-wrap .ct-kpi{flex:1;min-width:110px;text-align:center;}
 .ct-wrap .ct-kpi-ico{font-size:1.1rem;}
 .ct-wrap .ct-kpi-val{font-size:1.4rem;font-weight:800;color:#fff;text-shadow:0 0 8px rgba(239,68,68,.5);}
 .ct-wrap .ct-kpi-label{font-size:.6rem;color:#9a9a9a;text-transform:uppercase;letter-spacing:.05em;}
-
-/* legenda de status */
 .ct-wrap .ct-leg-item{display:flex;align-items:center;gap:.4rem;font-size:.74rem;color:#ddd;margin-bottom:.4rem;}
 .ct-wrap .ct-dot{width:9px;height:9px;border-radius:50%;box-shadow:0 0 6px currentColor;flex-shrink:0;}
-
 .ct-wrap .ct-badge{display:inline-flex;align-items:center;gap:.3rem;padding:.15rem .55rem;border-radius:20px;
 font-size:.62rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;border:1px solid currentColor;}
-
-/* histórico */
 .ct-wrap .ct-hist-item{border-left:2px solid var(--ct-bdr);padding:.1rem 0 .85rem 1rem;margin-left:.3rem;position:relative;}
 .ct-wrap .ct-hist-dot{position:absolute;left:-6.5px;top:2px;width:11px;height:11px;border-radius:50%;box-shadow:0 0 8px currentColor;}
 .ct-wrap .ct-hist-date{font-size:.66rem;color:#9a9a9a;}
 .ct-wrap .ct-hist-status{font-weight:700;color:#fff;font-size:.82rem;}
 .ct-wrap .ct-hist-obs{font-size:.7rem;color:#b5b5b5;}
 .ct-wrap .ct-empty{color:#777;font-size:.78rem;text-align:center;padding:1.2rem 0;}
+.ct-wrap .ct-alerta{background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.5);border-radius:8px;
+padding:.5rem .7rem;font-size:.74rem;color:#fbbf24;margin-bottom:.4rem;}
+.ct-wrap .ct-alerta.atrasado{background:rgba(239,68,68,.14);border-color:rgba(239,68,68,.6);color:#f87171;}
 </style>"""
+
+
+# ============================================================
+# PERMISSÕES — só Almoxarife/Administrador registram entrada/saída
+# ============================================================
+def _perfil_atual():
+    try:
+        from utils.auth import sessao
+        u = sessao()
+        return (u or {}).get("perfil")
+    except Exception:
+        return None  # ambiente sem utils.auth (ex.: testes) — tratado como permitido abaixo
+
+
+def _pode_editar() -> bool:
+    perfil = _perfil_atual()
+    if perfil is None:
+        return True  # fallback de desenvolvimento/teste
+    return perfil in PERFIS_COM_EDICAO
 
 
 def _usuario_atual() -> str:
@@ -267,50 +339,71 @@ def _badge_status(status: str) -> str:
 
 
 # ============================================================
-# RASTRO VISUAL (SVG com glow + animação, no "canvas" central)
+# RASTRO VISUAL — roteado por pontos-âncora fixos por setor (invisíveis)
 # ============================================================
+_LARGURA, _ALTURA = 900, 230
+
+# Um ponto-âncora fixo por setor: onde o "cabo" desse setor encosta no
+# canvas. Nunca são desenhados como círculos — só definem a rota da linha.
+def _ancoras():
+    return {
+        "transfer": (_LARGURA * 0.28, 0),
+        "ecom": (_LARGURA * 0.72, 0),
+        "par": (0, _ALTURA * 0.5),
+        "entrada": (_LARGURA * 0.20, _ALTURA),
+        "receb": (_LARGURA * 0.55, _ALTURA),
+        "plan": (_LARGURA * 0.85, _ALTURA),
+    }
+
+
+def _rota_ortogonal(p1, p2):
+    x1, y1 = p1
+    x2, y2 = p2
+    my = _ALTURA / 2
+    return f"M{x1},{y1} L{x1},{my} L{x2},{my} L{x2},{y2}"
+
+
 def _render_canvas(equip=None, mostrar_rastro=False):
-    largura, altura = 900, 230
+    ancoras = _ancoras()
     partes = [
-        f'<svg viewBox="0 0 {largura} {altura}" xmlns="http://www.w3.org/2000/svg">',
+        f'<svg viewBox="0 0 {_LARGURA} {_ALTURA}" xmlns="http://www.w3.org/2000/svg">',
         '<defs><filter id="ctglow" x="-60%" y="-60%" width="220%" height="220%">'
         '<feGaussianBlur stdDeviation="4" result="b"/>'
-        '<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>'
-        '</filter></defs>',
+        '<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>'
+        '<marker id="ctarrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" '
+        'orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#fff"/></marker></defs>',
         '<style>.ctdash{stroke-dasharray:8,7;animation:ctd 1.1s linear infinite}'
         '@keyframes ctd{to{stroke-dashoffset:-30}}</style>',
-        f'<rect x="0" y="0" width="{largura}" height="{altura}" fill="#050506"/>',
+        f'<rect x="0" y="0" width="{_LARGURA}" height="{_ALTURA}" fill="#050506"/>',
     ]
-    for gx in range(0, largura, 45):
-        partes.append(f'<line x1="{gx}" y1="0" x2="{gx}" y2="{altura}" stroke="#161616" stroke-width="1"/>')
-    for gy in range(0, altura, 45):
-        partes.append(f'<line x1="0" y1="{gy}" x2="{largura}" y2="{gy}" stroke="#161616" stroke-width="1"/>')
+    for gx in range(0, _LARGURA, 45):
+        partes.append(f'<line x1="{gx}" y1="0" x2="{gx}" y2="{_ALTURA}" stroke="#161616" stroke-width="1"/>')
+    for gy in range(0, _ALTURA, 45):
+        partes.append(f'<line x1="0" y1="{gy}" x2="{_LARGURA}" y2="{gy}" stroke="#161616" stroke-width="1"/>')
 
     if mostrar_rastro and equip and equip.historico:
-        n = len(equip.historico)
-        step = largura / (n + 1)
-        pontos = [(step * (i + 1), altura / 2 + (35 if i % 2 else -35)) for i in range(n)]
-        for i in range(n - 1):
-            x1, y1 = pontos[i]
-            x2, y2 = pontos[i + 1]
+        setores_visitados = [ev.setor_novo for ev in equip.historico if ev.setor_novo in ancoras]
+        for i in range(len(setores_visitados) - 1):
+            p1 = ancoras[setores_visitados[i]]
+            p2 = ancoras[setores_visitados[i + 1]]
             cor = STATUS_CORES.get(equip.historico[i + 1].status_novo, "#ef4444")
             partes.append(
-                f'<path d="M{x1},{y1} L{x1},{(y1+y2)/2} L{x2},{(y1+y2)/2} L{x2},{y2}" '
-                f'fill="none" stroke="{cor}" stroke-width="2.5" class="ctdash" filter="url(#ctglow)" marker-end="url(#arrow)"/>'
+                f'<path d="{_rota_ortogonal(p1, p2)}" fill="none" stroke="{cor}" stroke-width="2.5" '
+                f'class="ctdash" filter="url(#ctglow)" marker-end="url(#ctarrow)"/>'
             )
-        partes.insert(2, '<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" '
-                          'orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#fff"/></marker>')
-        for i, (x, y) in enumerate(pontos):
-            ev = equip.historico[i]
-            cor = STATUS_CORES.get(ev.status_novo, "#ef4444")
-            partes.append(f'<circle cx="{x}" cy="{y}" r="8" fill="{cor}" filter="url(#ctglow)"/>')
+        # marca só o ponto ATUAL (posição de agora do equipamento) — os
+        # pontos-âncora em si permanecem invisíveis, como pedido.
+        if setores_visitados:
+            x, y = ancoras[setores_visitados[-1]]
+            cor_atual = STATUS_CORES.get(equip.status, "#ef4444")
+            partes.append(f'<circle cx="{x}" cy="{y}" r="9" fill="{cor_atual}" filter="url(#ctglow)"/>')
             partes.append(
-                f'<text x="{x}" y="{y-14}" font-size="10" text-anchor="middle" fill="#fff" '
-                f'font-family="sans-serif">{SETOR_NOMES.get(ev.setor_novo, ev.setor_novo)}</text>'
+                f'<text x="{x}" y="{y-16}" font-size="10" text-anchor="middle" fill="#fff" '
+                f'font-family="sans-serif">{SETOR_NOMES.get(setores_visitados[-1], "")}</text>'
             )
     else:
         partes.append(
-            f'<text x="{largura/2}" y="{altura/2}" font-size="13" text-anchor="middle" '
+            f'<text x="{_LARGURA/2}" y="{_ALTURA/2}" font-size="13" text-anchor="middle" '
             'fill="#555" font-family="sans-serif">Selecione um equipamento para ver o rastro</text>'
         )
     partes.append("</svg>")
@@ -327,8 +420,6 @@ def _setor_button(setor_id: str, tall: bool = False):
     st.markdown("</div>", unsafe_allow_html=True)
     if clicado:
         st.session_state["ct_setor_foco"] = setor_id
-        equipamentos = _service.por_setor(setor_id)
-        st.session_state["ct_equip_sel"] = equipamentos[0].id if equipamentos else None
         st.rerun()
 
 
@@ -351,19 +442,6 @@ def _render_mapa():
             _setor_button("receb")
         with c5:
             _setor_button("plan")
-
-
-def _render_legenda():
-    st.markdown('<div class="ct-card"><div class="ct-card-h">Legenda de status</div>', unsafe_allow_html=True)
-    cols = st.columns(2)
-    for i, status in enumerate(STATUS_LEGENDA):
-        cor = STATUS_CORES[status]
-        with cols[i % 2]:
-            st.markdown(
-                f'<div class="ct-leg-item"><span class="ct-dot" style="background:{cor};color:{cor}"></span>{status}</div>',
-                unsafe_allow_html=True,
-            )
-    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _render_resumo():
@@ -389,11 +467,12 @@ def _render_rastro_explicacao():
     st.markdown(
         '<div class="ct-card"><div class="ct-card-h">🛡️ Rastro de movimentação</div>'
         '<div class="ct-card-sub">Cada mudança de status é registrada e confirmada, deixando um rastro '
-        'visual no mapa e no histórico do equipamento.</div>',
+        'visual no mapa e no histórico do equipamento — inclusive movimentações de empréstimo entre setores.</div>',
         unsafe_allow_html=True,
     )
-    cols = st.columns(len(STATUS_LEGENDA))
-    for col, status in zip(cols, STATUS_LEGENDA):
+    legenda = ["Recebido", "Em uso", "Em traslado", "Quebrado", "Substituído"]
+    cols = st.columns(len(legenda))
+    for col, status in zip(cols, legenda):
         cor = STATUS_CORES[status]
         col.markdown(
             f'<div class="ct-leg-item"><span class="ct-dot" style="background:{cor};color:{cor}"></span>{status}</div>',
@@ -402,8 +481,113 @@ def _render_rastro_explicacao():
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+def _render_emprestimos_pendentes():
+    pendentes = _service.emprestimos_pendentes()
+    if not pendentes:
+        return
+    st.markdown('<div class="ct-card"><div class="ct-card-h">🔔 Empréstimos pendentes de devolução</div>', unsafe_allow_html=True)
+    hoje = date.today()
+    for e in pendentes:
+        try:
+            venc = datetime.strptime(e.devolucao_prevista, "%d/%m/%Y").date()
+            atrasado = venc < hoje
+        except ValueError:
+            atrasado = False
+        classe = "ct-alerta atrasado" if atrasado else "ct-alerta"
+        situacao_txt = "ATRASADO" if atrasado else "no prazo"
+        st.markdown(
+            f'<div class="{classe}">{e.numero_serie} — {e.descricao or e.tipo} está em '
+            f'{SETOR_NOMES.get(e.setor, e.setor)}, deve devolver a {SETOR_NOMES.get(e.setor_fixo, e.setor_fixo)} '
+            f'até {e.devolucao_prevista} ({situacao_txt})</div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 # ============================================================
-# CONFIRMAÇÃO DE ALTERAÇÃO (obrigatória antes de gravar setor/status)
+# AÇÕES DO SETOR SELECIONADO — lista + "Informar equipamento"
+# ============================================================
+@st.dialog("Equipamento de outro setor")
+def _dialog_setor_divergente():
+    p = st.session_state.get("ct_pendente_setor")
+    if not p:
+        st.stop()
+    equip = _service.buscar(p["equip_id"])
+    st.warning(
+        f"O equipamento **{equip.numero_serie}** pertence ao setor "
+        f"**{SETOR_NOMES.get(equip.setor_fixo, equip.setor_fixo)}**. "
+        f"Deseja mesmo registrá-lo em **{SETOR_NOMES.get(p['setor_destino'], p['setor_destino'])}**?"
+    )
+    condicao = st.radio("Condição", CONDICOES, horizontal=True, key="ct_cond_div")
+    devolucao = None
+    if condicao == CONDICAO_EMPRESTIMO:
+        devolucao = st.date_input("Data prevista de devolução", key="ct_dev_div")
+    c1, c2 = st.columns(2)
+    if c1.button("Cancelar", use_container_width=True, key="ct_div_cancelar"):
+        st.session_state.pop("ct_pendente_setor", None)
+        st.rerun()
+    if c2.button("Confirmar", type="primary", use_container_width=True, key="ct_div_confirmar"):
+        dev_str = devolucao.strftime("%d/%m/%Y") if (condicao == CONDICAO_EMPRESTIMO and devolucao) else None
+        _service.informar_equipamento_no_setor(
+            equip, p["setor_destino"], usuario=_usuario_atual(), condicao=condicao,
+            devolucao_prevista=dev_str, observacao="Registrado via mapa (setor divergente do setor fixo).",
+        )
+        st.session_state.pop("ct_pendente_setor", None)
+        st.session_state["ct_equip_sel"] = equip.id
+        st.success("Equipamento registrado no setor.")
+        st.rerun()
+
+
+def _render_setor_focus():
+    setor_id = st.session_state.get("ct_setor_foco")
+    if not setor_id:
+        return
+    equipamentos = _service.por_setor(setor_id)
+    st.markdown(
+        f'<div class="ct-card"><div class="ct-card-h">Setor selecionado: {SETOR_NOMES[setor_id]}</div>',
+        unsafe_allow_html=True,
+    )
+    if st.button("✕ Fechar setor", key="ct_fechar_setor"):
+        st.session_state["ct_setor_foco"] = None
+        st.rerun()
+
+    if not equipamentos:
+        st.markdown('<div class="ct-empty">Nenhum equipamento neste setor no momento.</div>', unsafe_allow_html=True)
+    for e in equipamentos:
+        col1, col2 = st.columns([4, 1])
+        col1.markdown(f"**{e.numero_serie}** — {e.descricao or e.tipo}  \n{_badge_status(e.status)} · {e.condicao}", unsafe_allow_html=True)
+        if col2.button("Ver", key=f"foco_ver_{e.id}"):
+            st.session_state["ct_equip_sel"] = e.id
+            st.rerun()
+
+    if _pode_editar():
+        st.markdown("---")
+        todos = _service.listar()
+        if todos:
+            opcoes = {f"{e.numero_serie} — {e.descricao or e.tipo}": e.id for e in todos}
+            escolha = st.selectbox("Informar equipamento neste setor", list(opcoes.keys()), key="ct_informar_sel")
+            if st.button("Registrar neste setor", key="ct_informar_btn"):
+                equip = _service.buscar(opcoes[escolha])
+                if _service.setor_diverge_do_fixo(equip, setor_id):
+                    st.session_state["ct_pendente_setor"] = {"equip_id": equip.id, "setor_destino": setor_id}
+                    st.rerun()
+                else:
+                    _service.informar_equipamento_no_setor(
+                        equip, setor_id, usuario=_usuario_atual(), condicao=CONDICAO_FIXO,
+                        observacao="Registrado via mapa.",
+                    )
+                    st.session_state["ct_equip_sel"] = equip.id
+                    st.success("Equipamento registrado.")
+                    st.rerun()
+        else:
+            st.caption("Nenhum equipamento cadastrado ainda pelo Planejamento.")
+    else:
+        st.caption("Apenas Almoxarife/Administrador podem registrar equipamentos em um setor.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ============================================================
+# CONFIRMAÇÃO DE ALTERAÇÃO DE STATUS (dialog)
 # ============================================================
 @st.dialog("Confirmar alteração")
 def _dialog_confirmar():
@@ -432,108 +616,99 @@ def _dialog_confirmar():
 
 
 # ============================================================
-# PAINEL LATERAL — Cadastrar/Editar
+# PAINEL LATERAL — Cadastro em lote (só Almoxarife/Administrador)
 # ============================================================
-def _painel_cadastro_editar(ctx="a"):
-    equip = _service.buscar(st.session_state.get("ct_equip_sel")) if st.session_state.get("ct_equip_sel") else None
-    titulo = "Editar equipamento" if equip else "Cadastrar equipamento"
-
-    st.markdown(f'<div class="ct-card"><div class="ct-card-h">{titulo.upper()}', unsafe_allow_html=True)
-    if equip:
-        st.markdown('<span style="cursor:pointer" title="Cancelar seleção">✕</span></div>', unsafe_allow_html=True)
-        if st.button("✕ Limpar seleção", key=f"ct_limpar_sel_{ctx}", use_container_width=True):
-            st.session_state["ct_equip_sel"] = None
-            st.session_state["ct_setor_foco"] = None
-            st.rerun()
-    else:
+def _painel_cadastro_lote(ctx="a"):
+    st.markdown('<div class="ct-card"><div class="ct-card-h">Cadastrar equipamentos (entrada em lote)</div>', unsafe_allow_html=True)
+    if not _pode_editar():
+        st.caption("Apenas Almoxarife/Administrador podem registrar entrada de equipamentos.")
         st.markdown("</div>", unsafe_allow_html=True)
+        return
+    st.caption("Tipo, descrição e acesso valem para todos os números de série informados abaixo.")
+    tipo = st.text_input("Tipo", key=f"ct_lote_tipo_{ctx}")
+    descricao = st.text_input("Descrição", key=f"ct_lote_desc_{ctx}")
+    acesso = st.selectbox("Acesso", ["Próprio", "Alugado"], key=f"ct_lote_acesso_{ctx}")
+    setor_destino = st.selectbox("Setor de destino (designado pelo Planejamento)", SETOR_IDS,
+                                  format_func=lambda s: SETOR_NOMES[s], key=f"ct_lote_setor_{ctx}")
+    numeros_txt = st.text_area("Números de série (um por linha)", key=f"ct_lote_numeros_{ctx}", height=100)
 
-    numero_serie = st.text_input("Numeração", value=equip.numero_serie if equip else "", key=f"ct_f_num_{ctx}",
-                                  disabled=bool(equip), placeholder="Ex.: 000123")
-    tipo = st.text_input("Tipo", value=equip.tipo if equip else "", key=f"ct_f_tipo_{ctx}")
-    descricao = st.text_input("Descrição", value=equip.descricao if equip else "", key=f"ct_f_desc_{ctx}")
-
-    if equip:
-        st.selectbox("Status", STATUS_LIST, index=STATUS_LIST.index(equip.status), key=f"ct_f_status_{ctx}", disabled=True)
-        st.selectbox("Localização atual", SETOR_IDS, index=SETOR_IDS.index(equip.setor),
-                     format_func=lambda s: SETOR_NOMES[s], key=f"ct_f_setor_{ctx}", disabled=True)
-        st.caption('Para mudar status/localização, use "Atualizar status" no painel de Detalhes — assim fica registrado no histórico.')
-        acesso = st.selectbox("Acesso", ["Próprio", "Alugado"],
-                               index=["Próprio", "Alugado"].index(equip.proprio_ou_alugado), key=f"ct_f_acesso_{ctx}")
-    else:
-        status_inicial = st.selectbox("Status", STATUS_LIST, key=f"ct_f_status_novo_{ctx}")
-        setor_inicial = st.selectbox("Localização atual", SETOR_IDS, format_func=lambda s: SETOR_NOMES[s], key=f"ct_f_setor_novo_{ctx}")
-        acesso = st.selectbox("Acesso", ["Próprio", "Alugado"], key=f"ct_f_acesso_novo_{ctx}")
-
-    cA, cB = st.columns(2)
-    if cA.button("Cancelar", use_container_width=True, key=f"ct_f_cancelar_{ctx}"):
-        st.session_state["ct_equip_sel"] = None
-        st.rerun()
-    if cB.button("Salvar", type="primary", use_container_width=True, key=f"ct_f_salvar_{ctx}"):
-        if equip:
-            equip.tipo, equip.descricao, equip.proprio_ou_alugado = tipo, descricao, acesso
-            _service.repo.salvar(equip)
-            st.success("Dados atualizados.")
-            st.rerun()
+    if st.button("Registrar entrada", type="primary", use_container_width=True, key=f"ct_lote_salvar_{ctx}"):
+        numeros = [n for n in numeros_txt.splitlines() if n.strip()]
+        if not numeros or not descricao.strip():
+            st.warning("Informe a descrição e ao menos um número de série.")
         else:
-            if not numero_serie.strip() or not descricao.strip():
-                st.warning("Preencha ao menos Numeração e Descrição.")
-            else:
-                novo = _service.criar_equipamento({
-                    "numero_serie": numero_serie.strip(), "descricao": descricao.strip(),
-                    "tipo": tipo, "proprio_ou_alugado": acesso,
-                }, usuario=_usuario_atual())
-                if status_inicial != "Recebido" or setor_inicial != "entrada":
-                    _service.alterar_status(novo, status_inicial, setor_inicial, usuario=_usuario_atual(),
-                                             observacao="Definido no cadastro.")
-                st.session_state["ct_equip_sel"] = novo.id
-                st.success(f"Equipamento {numero_serie} cadastrado.")
-                st.rerun()
+            resultado = _service.cadastrar_lote(numeros, tipo, descricao, acesso, setor_destino, usuario=_usuario_atual())
+            msgs = []
+            if resultado["criados"]:
+                msgs.append(f"{len(resultado['criados'])} novo(s) cadastrado(s)")
+            if resultado["reabertos"]:
+                msgs.append(f"{len(resultado['reabertos'])} já existente(s) — novo ciclo registrado no histórico")
+            st.success(" · ".join(msgs) if msgs else "Nada para registrar.")
+            st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ============================================================
-# PAINEL LATERAL — Detalhes do equipamento
+# PAINEL LATERAL — Detalhes do equipamento selecionado
 # ============================================================
 def _painel_detalhes(ctx="a"):
     equip = _service.buscar(st.session_state.get("ct_equip_sel")) if st.session_state.get("ct_equip_sel") else None
     st.markdown('<div class="ct-card"><div class="ct-card-h">Detalhes do equipamento</div>', unsafe_allow_html=True)
     if not equip:
-        st.markdown('<div class="ct-empty">📦<br/>Selecione um setor no mapa ou um item na lista para ver os detalhes.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="ct-empty">📦<br/>Clique num setor no mapa e selecione um equipamento para ver os detalhes.</div>', unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
         return
 
+    linha_emp = ""
+    if equip.condicao == CONDICAO_EMPRESTIMO and equip.devolucao_prevista:
+        linha_emp = f"  \n**Devolução prevista:** {equip.devolucao_prevista} → {SETOR_NOMES.get(equip.setor_fixo, equip.setor_fixo)}"
     st.markdown(
         f"**Numeração:** {equip.numero_serie}  \n**Tipo:** {equip.tipo or '-'}  \n"
         f"**Status atual:** {_badge_status(equip.status)}  \n"
         f"**Localização atual:** {SETOR_NOMES.get(equip.setor, equip.setor)}  \n"
-        f"**Acesso:** {equip.proprio_ou_alugado}",
+        f"**Setor fixo (dono):** {SETOR_NOMES.get(equip.setor_fixo, equip.setor_fixo) if equip.setor_fixo else '-'}  \n"
+        f"**Condição:** {equip.condicao}{linha_emp}  \n**Acesso:** {equip.proprio_ou_alugado}",
         unsafe_allow_html=True,
     )
 
+    if not _pode_editar():
+        st.caption("Apenas Almoxarife/Administrador podem alterar o status.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
     with st.expander("🔄 Atualizar status"):
         novo_status = st.radio("Novo status", STATUS_LIST, horizontal=True, key=f"ct_novo_status_{ctx}")
-        novo_setor = st.selectbox("Setor", SETOR_IDS, format_func=lambda s: SETOR_NOMES[s], key=f"ct_novo_setor_{ctx}")
+        motivo_quebra = ""
+        if novo_status == STATUS_QUEBRA:
+            st.info("Equipamentos quebrados são movidos automaticamente para o setor Planejamento.")
+            motivo_quebra = st.text_area("Descreva a quebra (obrigatório)", key=f"ct_motivo_quebra_{ctx}")
+            novo_setor = "plan"
+        else:
+            novo_setor = st.selectbox("Setor", SETOR_IDS, format_func=lambda s: SETOR_NOMES[s], key=f"ct_novo_setor_{ctx}")
         observacao = st.text_area("Observação (opcional)", max_chars=200, key=f"ct_obs_{ctx}")
         if st.button("Confirmar alteração", type="primary", use_container_width=True, key=f"ct_confirmar_alt_{ctx}"):
-            st.session_state["ct_pendente"] = {
-                "equip_id": equip.id, "novo_status": novo_status,
-                "novo_setor": novo_setor, "observacao": observacao,
-            }
-            st.rerun()
+            if novo_status == STATUS_QUEBRA and not motivo_quebra.strip():
+                st.warning("Descreva o motivo da quebra antes de confirmar.")
+            else:
+                obs_final = f"Motivo da quebra: {motivo_quebra.strip()}" if novo_status == STATUS_QUEBRA else observacao
+                st.session_state["ct_pendente"] = {
+                    "equip_id": equip.id, "novo_status": novo_status,
+                    "novo_setor": novo_setor, "observacao": obs_final,
+                }
+                st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ============================================================
 # PAINEL LATERAL — Histórico de movimentações
 # ============================================================
-def _exportar_historico(equip, ctx):
+def _exportar_historico(equip, ctx="a"):
     import pandas as pd
     linhas = [{
         "Data/Hora": ev.data_hora, "Status anterior": ev.status_anterior or "-",
         "Status novo": ev.status_novo, "Localização anterior": SETOR_NOMES.get(ev.setor_anterior, ev.setor_anterior or "-"),
-        "Localização nova": SETOR_NOMES.get(ev.setor_novo, ev.setor_novo), "Usuário": ev.usuario,
-        "Observação": ev.observacao,
+        "Localização nova": SETOR_NOMES.get(ev.setor_novo, ev.setor_novo), "Condição": ev.condicao or "-",
+        "Devolução prevista": ev.devolucao_prevista or "-", "Usuário": ev.usuario, "Observação": ev.observacao,
     } for ev in equip.historico]
     df = pd.DataFrame(linhas)
     c1, c2 = st.columns(2)
@@ -542,7 +717,7 @@ def _exportar_historico(equip, ctx):
                         use_container_width=True, key=f"ct_exp_csv_{ctx}")
     buf = io.BytesIO()
     df.to_excel(buf, index=False, engine="openpyxl")
-    c2.download_button("⬇ Excel", buf.getvalue(), file_name=f"historico_{equip.numero_serie}.xlsx",
+    c2.download_button("⬇ Excel (vida útil)", buf.getvalue(), file_name=f"historico_{equip.numero_serie}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True, key=f"ct_exp_xlsx_{ctx}")
 
@@ -554,38 +729,38 @@ def _painel_historico(ctx="a"):
         st.markdown('<div class="ct-empty">Nenhuma movimentação para exibir ainda.</div>', unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
         return
-
     for ev in reversed(equip.historico):
         cor = STATUS_CORES.get(ev.status_novo, "#9a9a9a")
+        cond_txt = f" · {ev.condicao}" if ev.condicao else ""
         st.markdown(
             f'<div class="ct-hist-item" style="color:{cor}">'
             f'<div class="ct-hist-dot" style="background:{cor}"></div>'
             f'<div class="ct-hist-date">{ev.data_hora}</div>'
             f'<div class="ct-hist-status">{ev.status_novo}</div>'
-            f'<div class="ct-hist-obs">{SETOR_NOMES.get(ev.setor_novo, ev.setor_novo)} · Usuário: {ev.usuario}</div>'
+            f'<div class="ct-hist-obs">{SETOR_NOMES.get(ev.setor_novo, ev.setor_novo)}{cond_txt} · Usuário: {ev.usuario}</div>'
             f'<div class="ct-hist-obs">{ev.observacao}</div></div>',
             unsafe_allow_html=True,
         )
     st.markdown("</div>", unsafe_allow_html=True)
-    st.markdown('<div class="ct-card"><div class="ct-card-h">Exportar histórico</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ct-card"><div class="ct-card-h">Exportar vida útil</div>', unsafe_allow_html=True)
     _exportar_historico(equip, ctx)
     st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ============================================================
-# ABA "EQUIPAMENTOS" — filtros e listagem (seleção alimenta a coluna lateral)
+# ABA "EQUIPAMENTOS" — filtros e listagem
 # ============================================================
 def _painel_lista():
     todos = _service.listar()
     if not todos:
-        st.info('Nenhum equipamento cadastrado ainda. Use o painel "Cadastrar equipamento" ao lado.')
+        st.info('Nenhum equipamento cadastrado ainda.')
         return
     with st.expander("🔎 Filtros", expanded=False):
         c1, c2, c3, c4 = st.columns(4)
         f_serie = c1.text_input("Nº contém")
         f_status = c2.selectbox("Status", ["(todos)"] + STATUS_LIST)
         f_setor = c3.selectbox("Localização", ["(todos)"] + SETOR_IDS, format_func=lambda s: s if s == "(todos)" else SETOR_NOMES[s])
-        f_acesso = c4.selectbox("Acesso", ["(todos)", "Próprio", "Alugado"])
+        f_condicao = c4.selectbox("Condição", ["(todos)"] + CONDICOES)
 
     filtrados = todos
     if f_serie:
@@ -594,14 +769,14 @@ def _painel_lista():
         filtrados = [e for e in filtrados if e.status == f_status]
     if f_setor != "(todos)":
         filtrados = [e for e in filtrados if e.setor == f_setor]
-    if f_acesso != "(todos)":
-        filtrados = [e for e in filtrados if e.proprio_ou_alugado == f_acesso]
+    if f_condicao != "(todos)":
+        filtrados = [e for e in filtrados if e.condicao == f_condicao]
 
     st.caption(f"{len(filtrados)} equipamento(s)")
     for e in filtrados:
         col1, col2, col3 = st.columns([3, 2, 1])
-        col1.markdown(f"**{e.descricao}**  \n`{e.numero_serie}`")
-        col2.markdown(f"{_badge_status(e.status)} &nbsp; {SETOR_NOMES.get(e.setor,e.setor)}", unsafe_allow_html=True)
+        col1.markdown(f"**{e.numero_serie}**  \n{e.descricao or e.tipo}")
+        col2.markdown(f"{_badge_status(e.status)} &nbsp; {SETOR_NOMES.get(e.setor,e.setor)} &nbsp; · {e.condicao}", unsafe_allow_html=True)
         if col3.button("Abrir", key=f"lst_open_{e.id}"):
             st.session_state["ct_equip_sel"] = e.id
             st.session_state["ct_setor_foco"] = e.setor
@@ -631,11 +806,11 @@ def _tempo_medio_por_setor(equipamentos):
 
 def _painel_dashboard():
     todos = _service.listar()
-    total = len(todos)
     por_status = {s: sum(1 for e in todos if e.status == s) for s in STATUS_LIST}
     proprios = sum(1 for e in todos if e.proprio_ou_alugado == "Próprio")
-    alugados = total - proprios
+    alugados = len(todos) - proprios
 
+    _render_emprestimos_pendentes()
     c1, c2 = st.columns(2)
     with c1:
         st.markdown('<div class="ct-card"><div class="ct-card-h">Por status</div>', unsafe_allow_html=True)
@@ -662,10 +837,12 @@ def tela_controle():
 
     if st.session_state.get("ct_pendente"):
         _dialog_confirmar()
+    if st.session_state.get("ct_pendente_setor"):
+        _dialog_setor_divergente()
 
     st.markdown(
         '<div class="ct-title">CONTROLE — RASTREAMENTO DE EQUIPAMENTOS</div>'
-        '<div class="ct-sub">Clique em um setor para ver os equipamentos ali alocados.</div>',
+        '<div class="ct-sub">Clique em um setor para ver e registrar os equipamentos ali alocados.</div>',
         unsafe_allow_html=True,
     )
 
@@ -674,19 +851,18 @@ def tela_controle():
     with aba_mapa:
         col_map, col_side = st.columns([2.1, 1])
         with col_map:
-            st.markdown('<div class="ct-card"><div class="ct-card-h">Mapa de equipamentos</div>'
-                        '<div class="ct-card-sub">Visão geral em tempo real da distribuição e movimentação dos equipamentos.</div>',
-                        unsafe_allow_html=True)
+            st.markdown(
+                '<div class="ct-card"><div class="ct-card-h">Mapa de equipamentos</div>'
+                '<div class="ct-card-sub">Visão geral em tempo real da distribuição e movimentação dos equipamentos.</div>',
+                unsafe_allow_html=True,
+            )
             _render_mapa()
             st.markdown("</div>", unsafe_allow_html=True)
-            c1, c2 = st.columns(2)
-            with c1:
-                _render_legenda()
-            with c2:
-                _render_resumo()
+            _render_setor_focus()
+            _render_resumo()
             _render_rastro_explicacao()
         with col_side:
-            _painel_cadastro_editar(ctx="mapa")
+            _painel_cadastro_lote(ctx="mapa")
             _painel_detalhes(ctx="mapa")
             _painel_historico(ctx="mapa")
 
@@ -695,7 +871,7 @@ def tela_controle():
         with col_l:
             _painel_lista()
         with col_side2:
-            _painel_cadastro_editar(ctx="lista")
+            _painel_cadastro_lote(ctx="lista")
             _painel_detalhes(ctx="lista")
             _painel_historico(ctx="lista")
 
