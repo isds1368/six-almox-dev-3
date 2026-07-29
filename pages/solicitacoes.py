@@ -184,6 +184,8 @@ def _form_solicitar(u):
     with c1:
         prod_nome = st.selectbox("Produto *", list(pm.keys()), key="sol_prod_sel")
         prod      = pm[prod_nome]
+        if prod.get("foto_url"):
+            st.image(prod["foto_url"], width=200)
         un_sec    = prod.get("unidade_secundaria", "UN")
         un_lbl    = sigla_para_opcao(un_sec)
         disp      = estoque_disponivel(prod["id"])
