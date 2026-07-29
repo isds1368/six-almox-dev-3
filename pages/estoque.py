@@ -1,5 +1,6 @@
 """pages/estoque.py — Com histórico de movimentações por produto"""
-import streamlit as st, datetime
+import streamlit as st, datetime, io
+import pandas as pd
 import plotly.graph_objects as go
 from utils.database import (listar_produtos, listar_categorias, atualizar_produto,
     registrar_movimentacao, listar_movimentacoes, historico_produto, listar_solicitacoes)
@@ -16,6 +17,38 @@ def _u(label,val="UN",key=None):
 
 _PL=dict(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
          font=dict(family="Plus Jakarta Sans",size=11),margin=dict(l=0,r=0,t=20,b=0))
+
+def _planilha_estoque(prods):
+    """Gera um .xlsx (bytes) com todo o inventário, independente de filtros aplicados na tela."""
+    linhas=[]
+    for p in prods:
+        est=float(p["quantidade_total_secundaria"]); minp=float(p["estoque_minimo_primario"]); fat=float(p["fator_conversao"])
+        estp=est/fat if fat else 0
+        status,_=status_estoque(est,minp,fat)
+        cat=(p.get("categorias") or {}).get("nome","—")
+        linhas.append({
+            "Código":                p["codigo_interno"],
+            "Produto":               p["nome"],
+            "EAN":                   p.get("ean") or "",
+            "Categoria":             cat,
+            "Estoque (Secundária)":  round(est,2),
+            "Unidade Secundária":    sigla_para_opcao(p["unidade_secundaria"]),
+            "Estoque (Primária)":    round(estp,2),
+            "Unidade Primária":      sigla_para_opcao(p["unidade_primaria"]),
+            "Estoque Mínimo (Prim.)":round(minp,2),
+            "Status":                status,
+            "Ativo":                 "Sim" if p.get("ativo",True) else "Não",
+        })
+    df=pd.DataFrame(linhas)
+    buf=io.BytesIO()
+    with pd.ExcelWriter(buf,engine="openpyxl") as writer:
+        df.to_excel(writer,index=False,sheet_name="Inventário")
+        ws=writer.sheets["Inventário"]
+        for i,col in enumerate(df.columns):
+            largura=max((df[col].astype(str).map(len).max() if not df.empty else 0),len(col))+2
+            ws.column_dimensions[chr(65+i)].width=largura
+    buf.seek(0)
+    return buf.getvalue()
 
 def tela_estoque():
     st.markdown('<div class="pg">',unsafe_allow_html=True)
@@ -51,6 +84,18 @@ def _inv():
     baixos=sum(1 for p in prods if 0<float(p["quantidade_total_secundaria"])<=float(p["estoque_minimo_primario"])*float(p["fator_conversao"]))
     ok_c=total-criticos-baixos
     st.markdown(f'<div class="kpis" style="grid-template-columns:repeat(4,1fr);margin:.7rem 0 1rem;">{kpi_html("Total",total,"","var(--t2)")}{kpi_html("OK",ok_c,"","var(--ok)")}{kpi_html("Baixo",baixos,"","var(--warn)")}{kpi_html("Crítico",criticos,"","var(--err)")}</div>',unsafe_allow_html=True)
+
+    if ver_reserva:
+        dados_xlsx=_planilha_estoque(prods)
+        st.download_button(
+            "📥 Baixar Planilha do Inventário",
+            data=dados_xlsx,
+            file_name=f"inventario_{datetime.date.today().isoformat()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key="btn_export_inv",
+        )
+
     fil=prods
     if busca.strip():
         b=busca.lower(); fil=[p for p in fil if b in p["nome"].lower() or b in p["codigo_interno"].lower() or (p.get("ean") and b in p["ean"].lower())]
@@ -114,6 +159,15 @@ def _inv():
             if st.button("📊 Ver Histórico",use_container_width=True,key="btn_hist"): st.session_state["hist_produto"]=pm[sel]; st.rerun()
     if st.session_state.get("hist_produto"): _hist_modal(st.session_state["hist_produto"])
 
+    if fil:
+        st.markdown("**🖼️ Ver foto do produto:**")
+        pmf={f"{p['nome']} ({p['codigo_interno']})":p for p in fil}
+        csf,cbf=st.columns([4,1])
+        with csf: selp=st.selectbox("Produto",list(pmf.keys()),key="sel_foto",label_visibility="collapsed")
+        with cbf:
+            if st.button("🖼️ Ver Foto",use_container_width=True,key="btn_foto"): st.session_state["foto_produto"]=pmf[selp]; st.rerun()
+    if st.session_state.get("foto_produto"): _foto_modal(st.session_state["foto_produto"])
+
 def _hist_modal(prod):
     st.markdown(f'<div class="card"><div class="card-h">📊 Histórico — {esc(prod["nome"])} ({esc(prod["codigo_interno"])})</div>',unsafe_allow_html=True)
     hoje=datetime.date.today(); ini=hoje.replace(month=1,day=1)
@@ -151,6 +205,16 @@ def _hist_modal(prod):
         resp=exe if exe else sol; subtipo=m.get("tipo_entrada") or m.get("tipo_saida") or "—"
         rows+=f'<tr><td style="color:var(--t3);font-size:.73rem;">{datahora_br(m["criado_em"])}</td><td><strong style="color:{cor};">{tipo_lbl}</strong></td><td style="color:var(--t3);font-size:.75rem;">{subtipo}</td><td style="color:{cor};font-weight:700;font-family:var(--mono);">{sinal}{qtd_br(m["quantidade_convertida"])} {un_lbl}</td><td>{m.get("setor_solicitante") or "—"}</td><td style="color:var(--t3);">{m.get("numero_nf") or "—"}</td><td style="color:var(--t3);">{resp}</td></tr>'
     st.markdown(f'<table class="tbl"><thead><tr><th>Data/Hora</th><th>Tipo</th><th>Subtipo</th><th>Quantidade</th><th>Setor</th><th>NF</th><th>Responsável</th></tr></thead><tbody>{rows}</tbody></table>',unsafe_allow_html=True)
+    st.markdown("</div>",unsafe_allow_html=True)
+
+def _foto_modal(prod):
+    st.markdown(f'<div class="card"><div class="card-h">🖼️ Foto — {esc(prod["nome"])} ({esc(prod["codigo_interno"])})</div>',unsafe_allow_html=True)
+    if st.button("✖ Fechar",key="fechar_foto"): del st.session_state["foto_produto"]; st.rerun()
+    url=prod.get("foto_url")
+    if url:
+        st.image(url,caption=prod["nome"],use_container_width=True)
+    else:
+        st.info("Nenhuma foto cadastrada para este produto.")
     st.markdown("</div>",unsafe_allow_html=True)
 
 def _ajuste():
@@ -234,8 +298,11 @@ def _editar():
             eme=st.number_input("Est. mín (prim)",value=float(p["estoque_minimo_primario"]),min_value=0.0)
             eane=st.text_input("CODIGO DO PRODUTO",value=p.get("ean") or ""); ate=st.checkbox("Ativo",value=p.get("ativo",True))
         de=st.text_area("Descrição",value=p.get("descricao") or "")
+        fote=st.text_input("URL da Foto (opcional)",value=p.get("foto_url") or "",help="Cole o link de uma imagem do produto (ex.: link do Supabase Storage).")
+        if fote.strip():
+            st.image(fote.strip(),width=160)
         if st.form_submit_button("Salvar →",type="primary"):
-            atualizar_produto(p["id"],{"nome":ne.strip(),"categoria_id":cm.get(ce),"unidade_primaria":upe,"unidade_secundaria":use,"fator_conversao":fe,"estoque_minimo_primario":eme,"ean":eane.strip() or None,"descricao":de.strip() or None,"ativo":ate})
+            atualizar_produto(p["id"],{"nome":ne.strip(),"categoria_id":cm.get(ce),"unidade_primaria":upe,"unidade_secundaria":use,"fator_conversao":fe,"estoque_minimo_primario":eme,"ean":eane.strip() or None,"descricao":de.strip() or None,"ativo":ate,"foto_url":fote.strip() or None})
             st.success("✅ Produto atualizado!"); st.rerun()
     st.markdown("</div>",unsafe_allow_html=True)
 
