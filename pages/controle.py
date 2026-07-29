@@ -1,15 +1,22 @@
 """pages/controle.py — Módulo de Rastreamento Inteligente de Equipamentos.
 
 Arquivo único (sem subpastas) para simplificar deploy manual via GitHub.
-Camadas dentro do mesmo arquivo: modelos, repository, service, UI.
+Camadas dentro do mesmo arquivo: modelos, repository (Supabase), service, UI.
 Ponto de entrada usado pelo app.py: tela_controle()
+
+Requer utils/database.py com get_sb() e as tabelas do arquivo
+/schema/equipamentos_controle_schema.sql já criadas no Supabase.
 """
+import logging
 from dataclasses import dataclass, field
 from typing import List, Optional
 from datetime import datetime, date
 import io
 
 import streamlit as st
+from utils.database import get_sb
+
+_log = logging.getLogger("sfc.controle")
 
 # ============================================================
 # 1. MODELOS
@@ -95,40 +102,152 @@ class Equipamento:
 # ============================================================
 # 2. REPOSITORY
 # ============================================================
-class EquipamentoRepository:
-    def __init__(self):
-        if "ct_equipamentos" not in st.session_state:
-            st.session_state["ct_equipamentos"] = {}   # id -> Equipamento
-        if "ct_seq" not in st.session_state:
-            st.session_state["ct_seq"] = 1
+_log = logging.getLogger("sfc.controle")
 
-    # ── LEITURA ──────────────────────────────────────────────────────
+_TB_EQUIP = "equipamentos_controle"
+_TB_HIST = "equipamentos_controle_historico"
+
+
+# ── conversão de datas: telas usam "DD/MM/AAAA", banco usa "YYYY-MM-DD" ──
+def _data_iso(v: Optional[str]) -> Optional[str]:
+    if not v:
+        return None
+    try:
+        return datetime.strptime(v, "%d/%m/%Y").strftime("%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def _data_br(v: Optional[str]) -> Optional[str]:
+    if not v:
+        return None
+    try:
+        return datetime.strptime(str(v)[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+    except ValueError:
+        return v
+
+
+def _datahora_br(v: Optional[str]) -> str:
+    if not v:
+        return ""
+    try:
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00")).strftime("%d/%m/%Y %H:%M")
+    except ValueError:
+        return str(v)
+
+
+def _row_to_equip(row: dict) -> Equipamento:
+    return Equipamento(
+        id=row["id"], numero_serie=row.get("numero_serie", ""), descricao=row.get("descricao") or "",
+        fabricante=row.get("fabricante") or "", modelo=row.get("modelo") or "",
+        tipo=row.get("tipo") or "", categoria=row.get("categoria") or "",
+        patrimonio=row.get("patrimonio") or "", proprio_ou_alugado=row.get("proprio_ou_alugado") or "Próprio",
+        fornecedor=row.get("fornecedor") or "", data_aquisicao=row.get("data_aquisicao") or "",
+        garantia_ate=row.get("garantia_ate") or "", observacoes=row.get("observacoes") or "",
+        situacao=row.get("situacao") or "Ativo", status=row.get("status_atual") or "Recebido",
+        setor=row.get("setor_atual") or "entrada", setor_fixo=row.get("setor_fixo"),
+        condicao=row.get("condicao") or "Fixo", devolucao_prevista=_data_br(row.get("devolucao_prevista")),
+        historico=[],
+    )
+
+
+def _row_to_evento(row: dict) -> EventoHistorico:
+    return EventoHistorico(
+        data_hora=_datahora_br(row.get("criado_em")), status_anterior=row.get("status_anterior"),
+        status_novo=row.get("status_novo", ""), setor_anterior=row.get("setor_anterior"),
+        setor_novo=row.get("setor_novo", ""), usuario=row.get("usuario_nick") or "usuário",
+        observacao=row.get("observacao") or "", condicao=row.get("condicao"),
+        devolucao_prevista=_data_br(row.get("devolucao_prevista")),
+    )
+
+
+def _equip_payload(equip: Equipamento) -> dict:
+    return {
+        "id": equip.id, "numero_serie": equip.numero_serie, "descricao": equip.descricao,
+        "fabricante": equip.fabricante, "modelo": equip.modelo, "tipo": equip.tipo,
+        "categoria": equip.categoria, "patrimonio": equip.patrimonio,
+        "proprio_ou_alugado": equip.proprio_ou_alugado, "fornecedor": equip.fornecedor,
+        "data_aquisicao": equip.data_aquisicao, "garantia_ate": equip.garantia_ate,
+        "observacoes": equip.observacoes, "situacao": equip.situacao,
+        "status_atual": equip.status, "setor_atual": equip.setor, "setor_fixo": equip.setor_fixo,
+        "condicao": equip.condicao, "devolucao_prevista": _data_iso(equip.devolucao_prevista),
+    }
+
+
+class EquipamentoRepository:
+    # ── LEITURA — nunca derruba a página: loga e volta vazio ─────────
     def listar(self) -> List[Equipamento]:
-        # TODO Supabase:
-        # rows = get_sb().schema("equipment_tracking").table("equipment") \
-        #     .select("*").is_("deleted_at","null").execute().data or []
-        # + join com equipment_status_logs para montar o histórico
-        return list(st.session_state["ct_equipamentos"].values())
+        try:
+            rows = get_sb().table(_TB_EQUIP).select("*").order("criado_em").execute().data or []
+        except Exception as e:
+            _log.error("controle.listar: %s", e)
+            return []
+        equipamentos = [_row_to_equip(r) for r in rows]
+        if not equipamentos:
+            return equipamentos
+        try:
+            ids = [e.id for e in equipamentos]
+            hist_rows = (get_sb().table(_TB_HIST).select("*")
+                         .in_("equipamento_id", ids).order("criado_em").execute().data or [])
+        except Exception as e:
+            _log.error("controle.listar (historico): %s", e)
+            hist_rows = []
+        por_equip = {}
+        for hr in hist_rows:
+            por_equip.setdefault(hr["equipamento_id"], []).append(_row_to_evento(hr))
+        for e in equipamentos:
+            e.historico = por_equip.get(e.id, [])
+        return equipamentos
 
     def buscar(self, equipamento_id: str) -> Optional[Equipamento]:
-        return st.session_state["ct_equipamentos"].get(equipamento_id)
+        if not equipamento_id:
+            return None
+        try:
+            res = get_sb().table(_TB_EQUIP).select("*").eq("id", equipamento_id).execute().data
+        except Exception as e:
+            _log.error("controle.buscar: %s", e)
+            return None
+        if not res:
+            return None
+        equip = _row_to_equip(res[0])
+        try:
+            hist_rows = (get_sb().table(_TB_HIST).select("*")
+                         .eq("equipamento_id", equipamento_id).order("criado_em").execute().data or [])
+            equip.historico = [_row_to_evento(r) for r in hist_rows]
+        except Exception as e:
+            _log.error("controle.buscar (historico): %s", e)
+        return equip
 
-    # ── ESCRITA ──────────────────────────────────────────────────────
+    # ── ESCRITA — loga e avisa a pessoa (igual criar_produto etc.) ───
     def proximo_id(self) -> str:
-        n = st.session_state["ct_seq"]
-        st.session_state["ct_seq"] += 1
-        return f"EQ{n:04d}"
+        try:
+            n = get_sb().table(_TB_EQUIP).select("id", count="exact").execute().count or 0
+        except Exception as e:
+            _log.error("controle.proximo_id: %s", e)
+            n = 0
+        return f"EQ{n + 1:04d}"
 
     def salvar(self, equip: Equipamento):
-        # TODO Supabase: upsert em equipment_tracking.equipment (sem tocar historico)
-        st.session_state["ct_equipamentos"][equip.id] = equip
+        try:
+            get_sb().table(_TB_EQUIP).upsert(_equip_payload(equip)).execute()
+        except Exception as e:
+            _log.error("controle.salvar: %s", e)
+            st.error("❌ Não foi possível salvar o equipamento. Tente novamente.")
 
     def registrar_evento(self, equip: Equipamento, evento: EventoHistorico):
-        """Append-only: nunca sobrescreve, sempre adiciona um novo evento."""
-        # TODO Supabase: INSERT em equipment_tracking.equipment_status_logs
-        # (o histórico nunca é editado/apagado, só cresce)
-        equip.historico.append(evento)
         self.salvar(equip)
+        try:
+            get_sb().table(_TB_HIST).insert({
+                "equipamento_id": equip.id, "status_anterior": evento.status_anterior,
+                "status_novo": evento.status_novo, "setor_anterior": evento.setor_anterior,
+                "setor_novo": evento.setor_novo, "condicao": evento.condicao,
+                "devolucao_prevista": _data_iso(evento.devolucao_prevista),
+                "observacao": evento.observacao, "usuario_nick": evento.usuario,
+            }).execute()
+        except Exception as e:
+            _log.error("controle.registrar_evento: %s", e)
+            st.error("❌ Não foi possível gravar o histórico dessa alteração.")
+        equip.historico.append(evento)  # mantém o objeto em memória coerente na mesma execução
 
     @staticmethod
     def agora() -> str:
