@@ -180,12 +180,25 @@ def _form_solicitar(u):
     sn = [s["nome"] for s in sets] or ["Sem setor"]
 
     st.markdown('<div class="card"><div class="card-h">📝 Solicitação ao Almoxarifado</div>', unsafe_allow_html=True)
+
+    prod_nome = st.selectbox("Produto *", list(pm.keys()), key="sol_prod_sel")
+    prod      = pm[prod_nome]
+
+    st.markdown(
+        '<div style="font-size:.75rem;font-weight:700;color:var(--t3);'
+        'letter-spacing:.05em;text-transform:uppercase;margin:.6rem 0 .3rem;">Foto do Produto</div>',
+        unsafe_allow_html=True)
+    if prod.get("foto_url"):
+        st.image(prod["foto_url"], width=220)
+    else:
+        st.markdown(
+            '<div style="background:var(--bg2);border:1px dashed var(--bdr);border-radius:7px;'
+            'padding:.6rem .9rem;font-size:.8rem;color:var(--t3);margin-bottom:.4rem;">'
+            '📷 Nenhuma foto cadastrada para este produto.</div>',
+            unsafe_allow_html=True)
+
     c1, c2 = st.columns(2)
     with c1:
-        prod_nome = st.selectbox("Produto *", list(pm.keys()), key="sol_prod_sel")
-        prod      = pm[prod_nome]
-        if prod.get("foto_url"):
-            st.image(prod["foto_url"], width=200)
         un_sec    = prod.get("unidade_secundaria", "UN")
         un_lbl    = sigla_para_opcao(un_sec)
         disp      = estoque_disponivel(prod["id"])
