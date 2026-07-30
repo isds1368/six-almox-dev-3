@@ -127,16 +127,37 @@ def _inv():
     ini=(pagina-1)*por_pagina; fim=ini+por_pagina
     fil_pag=fil[ini:fim]
 
-    rows=""
-    for p in fil_pag:
-        est=float(p["quantidade_total_secundaria"]); minp=float(p["estoque_minimo_primario"]); fat=float(p["fator_conversao"])
-        estp=est/fat if fat else 0; txt,cls=status_estoque(est,minp,fat)
-        cat=(p.get("categorias") or {}).get("nome","—"); up_lbl=sigla_para_opcao(p["unidade_primaria"]); us_lbl=sigla_para_opcao(p["unidade_secundaria"])
-        res_qtd=reservas.get(p["id"],0.0) if ver_reserva else 0.0
-        res_html=f'<br><span style="font-size:.7rem;color:var(--warn);font-weight:600;">🔒 Reservado: {qtd_br(res_qtd)} {us_lbl}</span>' if res_qtd>0 else ''
-        rows+=f'<tr><td><strong>{p["nome"]}</strong></td><td class="mono">{p["codigo_interno"]}</td><td class="mono" style="color:var(--t4);">{p.get("ean") or "—"}</td><td style="color:var(--t3);">{cat}</td><td><strong>{qtd_br(est)} {us_lbl}</strong><br><span style="font-size:.71rem;color:var(--t3);">= {qtd_br(estp)} {up_lbl}</span>{res_html}</td><td style="color:var(--t3);">{qtd_br(minp)} {up_lbl}</td><td>{badge(txt,cls)}</td></tr>'
-    vz='<tr><td colspan="7" style="text-align:center;color:var(--t3);padding:2rem;">Nenhum resultado</td></tr>'
-    st.markdown(f'<table class="tbl"><thead><tr><th>Produto</th><th>Código</th><th>EAN</th><th>Categoria</th><th>Estoque</th><th>Mínimo</th><th>Status</th></tr></thead><tbody>{rows or vz}</tbody></table>',unsafe_allow_html=True)
+    if fil_pag:
+        head_ratio = [2.3, 1.0, 1.1, 1.3, 1.7, 1.2, 1.0, 0.9]
+        heads = ["Produto","Código","EAN","Categoria","Estoque","Mínimo","Status","Foto"]
+        hc = st.columns(head_ratio)
+        for col, txt in zip(hc, heads):
+            col.markdown(
+                f'<div style="font-size:.72rem;font-weight:700;color:var(--t3);'
+                f'letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid var(--bdr);'
+                f'padding-bottom:.4rem;margin-bottom:.3rem;">{txt}</div>', unsafe_allow_html=True)
+        for p in fil_pag:
+            est=float(p["quantidade_total_secundaria"]); minp=float(p["estoque_minimo_primario"]); fat=float(p["fator_conversao"])
+            estp=est/fat if fat else 0; txt,cls=status_estoque(est,minp,fat)
+            cat=(p.get("categorias") or {}).get("nome","—"); up_lbl=sigla_para_opcao(p["unidade_primaria"]); us_lbl=sigla_para_opcao(p["unidade_secundaria"])
+            res_qtd=reservas.get(p["id"],0.0) if ver_reserva else 0.0
+            res_html=f'<br><span style="font-size:.7rem;color:var(--warn);font-weight:600;">🔒 Reservado: {qtd_br(res_qtd)} {us_lbl}</span>' if res_qtd>0 else ''
+            rc = st.columns(head_ratio)
+            rc[0].markdown(f'<strong>{esc(p["nome"])}</strong>', unsafe_allow_html=True)
+            rc[1].markdown(f'<span class="mono">{esc(p["codigo_interno"])}</span>', unsafe_allow_html=True)
+            rc[2].markdown(f'<span class="mono" style="color:var(--t4);">{esc(p.get("ean") or "—")}</span>', unsafe_allow_html=True)
+            rc[3].markdown(f'<span style="color:var(--t3);">{esc(cat)}</span>', unsafe_allow_html=True)
+            rc[4].markdown(f'<strong>{qtd_br(est)} {us_lbl}</strong><br><span style="font-size:.71rem;color:var(--t3);">= {qtd_br(estp)} {up_lbl}</span>{res_html}', unsafe_allow_html=True)
+            rc[5].markdown(f'<span style="color:var(--t3);">{qtd_br(minp)} {up_lbl}</span>', unsafe_allow_html=True)
+            rc[6].markdown(badge(txt,cls), unsafe_allow_html=True)
+            with rc[7]:
+                if st.button("📷 Foto", key=f"foto_btn_{p['id']}", use_container_width=True):
+                    st.session_state["foto_produto"]=p
+                    st.session_state.pop("foto_modo",None)
+                    st.rerun()
+            st.markdown('<hr style="margin:.35rem 0;border:none;border-top:1px solid var(--bdr);">', unsafe_allow_html=True)
+    else:
+        st.markdown('<div style="text-align:center;color:var(--t3);padding:2rem;">Nenhum resultado</div>', unsafe_allow_html=True)
 
     if fil and total_paginas>1:
         cn1,cn2,cn3=st.columns([1,2,1])
@@ -159,13 +180,6 @@ def _inv():
             if st.button("📊 Ver Histórico",use_container_width=True,key="btn_hist"): st.session_state["hist_produto"]=pm[sel]; st.rerun()
     if st.session_state.get("hist_produto"): _hist_modal(st.session_state["hist_produto"])
 
-    if fil:
-        st.markdown("**🖼️ Ver foto do produto:**")
-        pmf={f"{p['nome']} ({p['codigo_interno']})":p for p in fil}
-        csf,cbf=st.columns([4,1])
-        with csf: selp=st.selectbox("Produto",list(pmf.keys()),key="sel_foto",label_visibility="collapsed")
-        with cbf:
-            if st.button("🖼️ Ver Foto",use_container_width=True,key="btn_foto"): st.session_state["foto_produto"]=pmf[selp]; st.rerun()
     if st.session_state.get("foto_produto"): _foto_modal(st.session_state["foto_produto"])
 
 def _hist_modal(prod):
@@ -209,12 +223,66 @@ def _hist_modal(prod):
 
 def _foto_modal(prod):
     st.markdown(f'<div class="card"><div class="card-h">🖼️ Foto — {esc(prod["nome"])} ({esc(prod["codigo_interno"])})</div>',unsafe_allow_html=True)
-    if st.button("✖ Fechar",key="fechar_foto"): del st.session_state["foto_produto"]; st.rerun()
-    url=prod.get("foto_url")
-    if url:
-        st.image(url,caption=prod["nome"],use_container_width=True)
-    else:
+    tem_foto = bool(prod.get("foto_url"))
+    modo = st.session_state.get("foto_modo")
+
+    if not tem_foto:
         st.info("Nenhuma foto cadastrada para este produto.")
+        if modo == "adicionar":
+            nova = st.text_input("URL da Foto", key="foto_nova_url", placeholder="Cole o link da imagem")
+            if nova.strip():
+                st.image(nova.strip(), width=200)
+            cs, cc = st.columns(2)
+            with cs:
+                if st.button("💾 Salvar Foto", type="primary", use_container_width=True, key="foto_salvar_btn"):
+                    if nova.strip():
+                        atualizar_produto(prod["id"], {"foto_url": nova.strip()})
+                        st.session_state.pop("foto_modo", None)
+                        st.session_state.pop("foto_nova_url", None)
+                        st.session_state.pop("foto_produto", None)
+                        st.success("Foto adicionada com sucesso.")
+                        st.rerun()
+                    else:
+                        st.error("Informe uma URL válida.")
+            with cc:
+                if st.button("Cancelar", use_container_width=True, key="foto_add_cancelar"):
+                    st.session_state.pop("foto_modo", None); st.rerun()
+        else:
+            if st.button("➕ Adicionar Foto", type="primary", key="foto_add_btn"):
+                st.session_state["foto_modo"] = "adicionar"; st.rerun()
+
+    else:
+        if modo == "ver":
+            st.image(prod["foto_url"], caption=prod["nome"], use_container_width=True)
+            if st.button("← Voltar", key="foto_ver_voltar"):
+                st.session_state.pop("foto_modo", None); st.rerun()
+        elif modo == "confirmar_apagar":
+            st.warning("Tem certeza que deseja apagar a foto deste produto? Essa ação não pode ser desfeita.")
+            ca, cb = st.columns(2)
+            with ca:
+                if st.button("🗑️ Sim, apagar", type="primary", use_container_width=True, key="foto_apagar_sim"):
+                    atualizar_produto(prod["id"], {"foto_url": None})
+                    st.session_state.pop("foto_modo", None)
+                    st.session_state.pop("foto_produto", None)
+                    st.success("Foto removida.")
+                    st.rerun()
+            with cb:
+                if st.button("Cancelar", use_container_width=True, key="foto_apagar_nao"):
+                    st.session_state.pop("foto_modo", None); st.rerun()
+        else:
+            cv, cd = st.columns(2)
+            with cv:
+                if st.button("👁️ Ver Foto", use_container_width=True, key="foto_ver_btn"):
+                    st.session_state["foto_modo"] = "ver"; st.rerun()
+            with cd:
+                if st.button("🗑️ Apagar Foto", use_container_width=True, key="foto_apagar_btn"):
+                    st.session_state["foto_modo"] = "confirmar_apagar"; st.rerun()
+
+    st.markdown('<div style="margin-top:.6rem;"></div>', unsafe_allow_html=True)
+    if st.button("✖ Fechar", key="fechar_foto"):
+        st.session_state.pop("foto_produto", None)
+        st.session_state.pop("foto_modo", None)
+        st.rerun()
     st.markdown("</div>",unsafe_allow_html=True)
 
 def _ajuste():
