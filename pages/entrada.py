@@ -95,40 +95,33 @@ def _nova_entrada():
             with c1:
                 nm    = st.text_input("Nome do produto *")
                 cat   = st.selectbox("Categoria", list(cm.keys()))
-                up_n  = _u("Unidade primária (controle)", val="CX", key="upn")
-                us_n  = _u("Unidade secundária (consumo)", val="UN", key="usn")
+                up_n  = _u("Unidade primária (Como você está recebendo? Em caixa? Paletizado?...)", val="CX", key="upn")
+                us_n  = _u("Unidade secundária (Como as áreas vão consumir? Unidades? A caixa completa?)", val="UN", key="usn")
             with c2:
-                fat_n = st.number_input("Fator de Conversão (1 primária = ? secundárias)", value=1.0, min_value=0.001, step=1.0)
-                em_n  = st.number_input("Estoque mínimo (unidade primária)", value=0.0, min_value=0.0)
+                fat_n = st.number_input("Fator de Conversão (1 primária = ? secundárias  / Aponte de acordo com o consumo do produto pelas áreas)", value=1.0, min_value=0.001, step=1.0)
+                em_n  = st.number_input("Estoque mínimo (Aponte de acordo com o controle do almoxarifado)", value=0.0, min_value=0.0)
                 ean_n = st.text_input("EAN ou Código SFC (Opcional)",
                                        value=st.session_state.get("en",""),
                                        placeholder="Deixe em branco se não tiver")
             desc_n = st.text_area("Descrição (opcional)", height=60)
+            foto_n = st.text_input("URL da Foto (opcional)", placeholder="Cole o link de uma imagem do produto")
+            if foto_n.strip():
+                st.image(foto_n.strip(), width=160)
             if st.form_submit_button("Cadastrar Produto →", type="primary", use_container_width=True):
-                nome_normalizado = nm.strip()
-                if not nome_normalizado:
+                if not nm.strip():
                     st.error("Nome obrigatório.")
                 else:
-                    # Bloqueia cadastro de produto com nome exatamente igual a um já existente
-                    # (comparação sem diferenciar maiúsculas/minúsculas e ignorando espaços extras)
-                    ja_existe = any(
-                        (p.get("nome") or "").strip().lower() == nome_normalizado.lower()
-                        for p in listar_produtos(apenas_ativos=False)
-                    )
-                    if ja_existe:
-                        st.error(f"⚠️ Já existe um produto cadastrado com o nome **{nome_normalizado}**. "
-                                 f"Use a busca por nome para localizá-lo, em vez de criar um novo cadastro.")
-                    else:
-                        d = {"nome": nome_normalizado, "categoria_id": cm.get(cat),
-                             "unidade_primaria": up_n, "unidade_secundaria": us_n,
-                             "fator_conversao": fat_n, "estoque_minimo_primario": em_n,
-                             "descricao": desc_n.strip() or None}
-                        if ean_n.strip(): d["ean"] = ean_n.strip()
-                        novo = criar_produto(d)
-                        st.session_state["ps"] = novo
-                        st.session_state.pop("en", None)
-                        st.success(f"✅ Produto **{novo['nome']}** cadastrado — {novo['codigo_interno']}")
-                        st.rerun()
+                    d = {"nome": nm.strip(), "categoria_id": cm.get(cat),
+                         "unidade_primaria": up_n, "unidade_secundaria": us_n,
+                         "fator_conversao": fat_n, "estoque_minimo_primario": em_n,
+                         "descricao": desc_n.strip() or None,
+                         "foto_url": foto_n.strip() or None}
+                    if ean_n.strip(): d["ean"] = ean_n.strip()
+                    novo = criar_produto(d)
+                    st.session_state["ps"] = novo
+                    st.session_state.pop("en", None)
+                    st.success(f"✅ Produto **{novo['nome']}** cadastrado — {novo['codigo_interno']}")
+                    st.rerun()
 
 
 def _form_entrada(prod, u, cm):
@@ -323,6 +316,9 @@ def _reabastecimento():
     # Tipo fora do form para condicionar obrigatoriedade NF
     te = st.selectbox("Tipo de entrada *", TIPOS, key="te_reab")
 
+    if prod.get("foto_url"):
+        st.image(prod["foto_url"], width=160, caption="Foto atual do produto")
+
     with st.form("freab"):
         c1, c2 = st.columns(2)
         with c1:
@@ -336,6 +332,7 @@ def _reabastecimento():
             forn = st.text_input("Fornecedor" + (" *" if te=="Nota Fiscal" else " (opcional)"),
                                   placeholder="Ex: Distribuidora ABC Ltda")
             obs  = st.text_area("Observação", height=50)
+            foto_reab = st.text_input("Atualizar URL da Foto (opcional)", placeholder="Deixe em branco para manter a foto atual")
 
         qc     = qtd * fat
         ui_lbl = sigla_para_opcao(ui)
@@ -398,9 +395,11 @@ def _reabastecimento():
                     "data_movimentacao":     agora.isoformat(),
                 })
 
-                # Atualiza a unidade primária cadastrada caso tenha sido alterada
-                if ui != up:
-                    atualizar_produto(prod["id"], {"unidade_primaria": ui})
+                # Atualiza a unidade primária cadastrada caso tenha sido alterada, e/ou a foto
+                upd = {}
+                if ui != up: upd["unidade_primaria"] = ui
+                if foto_reab.strip(): upd["foto_url"] = foto_reab.strip()
+                if upd: atualizar_produto(prod["id"], upd)
 
                 st.session_state["reab_ok"] = {
                     "nome":   prod["nome"],
