@@ -7,14 +7,10 @@ em lote + histórico completo de vida útil (SLA).
 Schema usado: rastreabilidade.*  (isolado do schema "public" do estoque)
 Execute schema_rastreabilidade.sql uma vez no Supabase antes de usar.
 
-INTEGRAÇÃO COM O RESTO DO SISTEMA (ajuste estes dois pontos):
-  1) get_client()      -> se já existir um client Supabase compartilhado
-                           (ex.: `from db import supabase`), troque esta
-                           função por essa importação e remova st.secrets.
-  2) usuario_atual()    -> hoje lê st.session_state["usuario"] com as
-                           chaves "nome" e "nivel" (Usuário/Almoxarife/
-                           Administrador), igual ao resto do sistema.
-                           Ajuste se a chave usada for outra.
+IMPORTANTE — antes de usar, exponha o schema "rastreabilidade" na API do
+Supabase: Project Settings > API > "Exposed schemas" > adicionar
+"rastreabilidade" (por padrão só "public" fica exposto; sem isso todas
+as chamadas abaixo retornam erro PGRST106/"schema must be one of...").
 =====================================================================
 """
 
@@ -23,31 +19,28 @@ from datetime import date, datetime
 
 import pandas as pd
 import streamlit as st
-from supabase import create_client, Client
+from utils.database import get_sb
 
 
 # ======================================================================
-# CONEXÃO
+# CONEXÃO — reaproveita o client já configurado em utils/database.py
 # ======================================================================
-@st.cache_resource
-def get_client() -> Client:
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
+def get_client():
+    return get_sb().schema("rastreabilidade")
 
 
 def usuario_atual() -> dict:
-    """Retorna {'nome': str, 'nivel': str}. Ajuste se a chave de sessão
-    usada no resto do sistema for diferente."""
+    """Espelha a estrutura real de st.session_state["usuario"]:
+    chaves "nick" (login) e "perfil" ('usuario' | 'almoxarife' | 'admin')."""
     u = st.session_state.get("usuario", {})
     return {
-        "nome": u.get("nome", "desconhecido"),
-        "nivel": u.get("nivel", "Usuário"),
+        "nome": u.get("nome") or u.get("nick", "desconhecido"),
+        "perfil": u.get("perfil", "usuario"),
     }
 
 
 def pode_cadastrar() -> bool:
-    return usuario_atual()["nivel"] in ("Almoxarife", "Administrador")
+    return usuario_atual()["perfil"] in ("almoxarife", "admin")
 
 
 # ======================================================================
@@ -98,17 +91,17 @@ def _ancora_setor(setor_id: str, ponto: str = "padrao"):
 # ACESSO A DADOS
 # ======================================================================
 def carregar_setores() -> list[dict]:
-    return get_client().schema("rastreabilidade").table("setores").select("*").execute().data
+    return get_client().table("setores").select("*").execute().data
 
 
 def carregar_equipamentos() -> pd.DataFrame:
-    data = get_client().schema("rastreabilidade").table("equipamentos").select("*").execute().data
+    data = get_client().table("equipamentos").select("*").execute().data
     return pd.DataFrame(data)
 
 
 def carregar_movimentacoes(equipamento_id: int) -> pd.DataFrame:
     data = (
-        get_client().schema("rastreabilidade").table("movimentacoes")
+        get_client().table("movimentacoes")
         .select("*").eq("equipamento_id", equipamento_id)
         .order("data_evento").execute().data
     )
@@ -117,7 +110,7 @@ def carregar_movimentacoes(equipamento_id: int) -> pd.DataFrame:
 
 def carregar_emprestimos_ativos() -> pd.DataFrame:
     data = (
-        get_client().schema("rastreabilidade").table("emprestimos")
+        get_client().table("emprestimos")
         .select("*, equipamentos(patrimonio)").eq("status", "ativo").execute().data
     )
     return pd.DataFrame(data)
@@ -125,7 +118,7 @@ def carregar_emprestimos_ativos() -> pd.DataFrame:
 
 def buscar_equipamento_por_patrimonio(patrimonio: str) -> dict | None:
     res = (
-        get_client().schema("rastreabilidade").table("equipamentos")
+        get_client().table("equipamentos")
         .select("*").eq("patrimonio", patrimonio.strip()).execute().data
     )
     return res[0] if res else None
@@ -136,7 +129,7 @@ def buscar_equipamento_por_patrimonio(patrimonio: str) -> dict | None:
 # ======================================================================
 def registrar_movimentacao(equipamento_id, evento, setor_origem=None, setor_destino=None,
                             condicao=None, descricao_quebra=None):
-    get_client().schema("rastreabilidade").table("movimentacoes").insert({
+    get_client().table("movimentacoes").insert({
         "equipamento_id": equipamento_id,
         "evento": evento,
         "setor_origem": setor_origem,
@@ -149,7 +142,7 @@ def registrar_movimentacao(equipamento_id, evento, setor_origem=None, setor_dest
 
 def _atualizar_equipamento(equipamento_id, **campos):
     campos["atualizado_em"] = datetime.utcnow().isoformat()
-    get_client().schema("rastreabilidade").table("equipamentos").update(campos).eq("id", equipamento_id).execute()
+    get_client().table("equipamentos").update(campos).eq("id", equipamento_id).execute()
 
 
 def cadastrar_lote(patrimonios: list[str], tipo: str, descricao: str, acesso: str):
@@ -161,7 +154,7 @@ def cadastrar_lote(patrimonios: list[str], tipo: str, descricao: str, acesso: st
         return
 
     cliente = get_client()
-    lote = cliente.schema("rastreabilidade").table("lotes_cadastro").insert({
+    lote = cliente.table("lotes_cadastro").insert({
         "tipo": tipo, "descricao": descricao, "acesso": acesso,
         "criado_por": usuario_atual()["nome"],
     }).execute().data[0]
@@ -177,7 +170,7 @@ def cadastrar_lote(patrimonios: list[str], tipo: str, descricao: str, acesso: st
             registrar_movimentacao(existente["id"], "recebimento", setor_destino="entrada")
             reentradas.append(p)
         else:
-            novo = cliente.schema("rastreabilidade").table("equipamentos").insert({
+            novo = cliente.table("equipamentos").insert({
                 "patrimonio": p, "lote_id": lote["id"], "tipo": tipo,
                 "descricao": descricao, "acesso": acesso, "status_atual": "recebido",
             }).execute().data[0]
@@ -232,12 +225,12 @@ def informar_equipamento_em_setor(patrimonio: str, setor_contexto: str,
             st.error("Informe a data de devolução para registrar o empréstimo.")
             return
         _atualizar_equipamento(equip["id"], setor_atual=setor_contexto, condicao_atual="emprestimo")
-        mov = get_client().schema("rastreabilidade").table("movimentacoes").insert({
+        mov = get_client().table("movimentacoes").insert({
             "equipamento_id": equip["id"], "evento": "emprestimo_saida",
             "setor_origem": setor_anterior, "setor_destino": setor_contexto,
             "condicao": "emprestimo", "usuario_nome": usuario_atual()["nome"],
         }).execute().data[0]
-        get_client().schema("rastreabilidade").table("emprestimos").insert({
+        get_client().table("emprestimos").insert({
             "equipamento_id": equip["id"], "movimentacao_saida_id": mov["id"],
             "setor_origem": setor_anterior, "setor_destino": setor_contexto,
             "data_devolucao_prevista": data_devolucao.isoformat(),
@@ -251,7 +244,7 @@ def confirmar_devolucao(emprestimo_id, equipamento_id, setor_origem):
     retorno é sempre manual (nunca volta sozinho)."""
     _atualizar_equipamento(equipamento_id, setor_atual=setor_origem, condicao_atual="fixo")
     registrar_movimentacao(equipamento_id, "emprestimo_retorno", setor_destino=setor_origem)
-    get_client().schema("rastreabilidade").table("emprestimos").update({
+    get_client().table("emprestimos").update({
         "status": "devolvido", "data_devolucao_real": date.today().isoformat(),
     }).eq("id", emprestimo_id).execute()
     st.success("Devolução confirmada.")
