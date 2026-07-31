@@ -14,6 +14,7 @@ from pages.estoque import tela_estoque
 from pages.notas import tela_notas
 from pages.usuarios import tela_usuarios
 from pages.configuracoes import tela_configuracoes
+from pages.controle import main as tela_controle
 
 def main():
     inject_css()
@@ -49,7 +50,7 @@ def _rota_almoxarife(u):
     pagina=pagina_atual()
     MENU=[("Dashboard","dashboard"),("Entrada","entrada"),("Solicitações","solicitacoes"),
           ("Saída Manual","saida_manual"),("Saída Aprovada","saida_aprovada"),
-          ("Estoque","estoque"),("Notas Fiscais","notas")]
+          ("Estoque","estoque"),("Notas Fiscais","notas"),("Controle","controle")]
     ini=(u.get("nick") or "?")[0].upper()
     st.markdown(f'<div class="bar"><div class="brand">SFC &nbsp;|&nbsp; ALM</div><div style="display:flex;align-items:center;gap:.5rem;color:rgba(255,255,255,.9);font-size:.76rem;"><span style="color:rgba(255,255,255,.55);font-size:.68rem;">Almoxarife</span><div class="av">{ini}</div><span style="font-weight:600;">{u.get("nick","")}</span></div></div>',unsafe_allow_html=True)
     st.markdown('<div class="subnav">',unsafe_allow_html=True)
@@ -66,7 +67,7 @@ def _rota_almoxarife(u):
     st.markdown("</div>",unsafe_allow_html=True)
     rotas={"dashboard":tela_dashboard,"entrada":tela_entrada,"solicitacoes":tela_solicitacoes_admin,
            "saida_manual":tela_saida_manual,"saida_aprovada":tela_saida_aprovada,"estoque":tela_estoque,
-           "notas":tela_notas}
+           "notas":tela_notas,"controle":tela_controle}
     rotas.get(pagina,tela_dashboard)()
 
 def _rota_admin(u):
@@ -74,7 +75,7 @@ def _rota_admin(u):
     topbar(pagina,u)
     rotas={"dashboard":tela_dashboard,"entrada":tela_entrada,"solicitacoes":tela_solicitacoes_admin,
            "saida_manual":tela_saida_manual,"saida_aprovada":tela_saida_aprovada,"estoque":tela_estoque,
-           "notas":tela_notas,"usuarios":tela_usuarios,"configuracoes":tela_configuracoes}
+           "notas":tela_notas,"usuarios":tela_usuarios,"configuracoes":tela_configuracoes,"controle":tela_controle}
     rotas.get(pagina,tela_dashboard)()
 
 if __name__=="__main__": main()
