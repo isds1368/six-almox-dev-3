@@ -450,3 +450,80 @@ def _hist():
         f'</tr></thead><tbody>{rows}</tbody></table>',
         unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- Paginação ---
+    OPCOES_PP=[10,20,40]
+    filtro_sig=f"{busca}|{cf}|{sf}"
+    if st.session_state.get("inv_filtro_sig")!=filtro_sig:
+        st.session_state["inv_filtro_sig"]=filtro_sig
+        st.session_state["inv_pagina"]=1
+
+    cpp1,cpp2=st.columns([1,5])
+    with cpp1:
+        por_pagina=st.selectbox("Itens por página",OPCOES_PP,key="inv_por_pagina")
+    if st.session_state.get("inv_por_pagina_ant")!=por_pagina:
+        st.session_state["inv_por_pagina_ant"]=por_pagina
+        st.session_state["inv_pagina"]=1
+
+    total_paginas=max(1,-(-len(fil)//por_pagina)) if fil else 1
+    pagina=st.session_state.get("inv_pagina",1)
+    pagina=min(max(pagina,1),total_paginas)
+    st.session_state["inv_pagina"]=pagina
+
+    ini=(pagina-1)*por_pagina; fim=ini+por_pagina
+    fil_pag=fil[ini:fim]
+
+    if fil_pag:
+        head_ratio = [2.3, 1.0, 1.1, 1.3, 1.7, 1.2, 1.0, 0.9]
+        heads = ["Produto","Código","EAN","Categoria","Estoque","Mínimo","Status","Foto"]
+        hc = st.columns(head_ratio)
+        for col, txt in zip(hc, heads):
+            col.markdown(
+                f'<div style="font-size:.72rem;font-weight:700;color:var(--t3);'
+                f'letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid var(--bdr);'
+                f'padding-bottom:.4rem;margin-bottom:.3rem;">{txt}</div>', unsafe_allow_html=True)
+        for p in fil_pag:
+            est=float(p["quantidade_total_secundaria"]); minp=float(p["estoque_minimo_primario"]); fat=float(p["fator_conversao"])
+            estp=est/fat if fat else 0; txt,cls=status_estoque(est,minp,fat)
+            cat=(p.get("categorias") or {}).get("nome","—"); up_lbl=sigla_para_opcao(p["unidade_primaria"]); us_lbl=sigla_para_opcao(p["unidade_secundaria"])
+            res_qtd=reservas.get(p["id"],0.0) if ver_reserva else 0.0
+            res_html=f'<br><span style="font-size:.7rem;color:var(--warn);font-weight:600;">🔒 Reservado: {qtd_br(res_qtd)} {us_lbl}</span>' if res_qtd>0 else ''
+            rc = st.columns(head_ratio)
+            rc[0].markdown(f'<strong>{esc(p["nome"])}</strong>', unsafe_allow_html=True)
+            rc[1].markdown(f'<span class="mono">{esc(p["codigo_interno"])}</span>', unsafe_allow_html=True)
+            rc[2].markdown(f'<span class="mono" style="color:var(--t4);">{esc(p.get("ean") or "—")}</span>', unsafe_allow_html=True)
+            rc[3].markdown(f'<span style="color:var(--t3);">{esc(cat)}</span>', unsafe_allow_html=True)
+            rc[4].markdown(f'<strong>{qtd_br(est)} {us_lbl}</strong><br><span style="font-size:.71rem;color:var(--t3);">= {qtd_br(estp)} {up_lbl}</span>{res_html}', unsafe_allow_html=True)
+            rc[5].markdown(f'<span style="color:var(--t3);">{qtd_br(minp)} {up_lbl}</span>', unsafe_allow_html=True)
+            rc[6].markdown(badge(txt,cls), unsafe_allow_html=True)
+            with rc[7]:
+                if st.button("📷 Foto", key=f"foto_btn_{p['id']}", use_container_width=True):
+                    st.session_state["foto_produto"]=p
+                    st.session_state.pop("foto_modo",None)
+                    st.rerun()
+            st.markdown('<hr style="margin:.35rem 0;border:none;border-top:1px solid var(--bdr);">', unsafe_allow_html=True)
+    else:
+        st.markdown('<div style="text-align:center;color:var(--t3);padding:2rem;">Nenhum resultado</div>', unsafe_allow_html=True)
+
+    if fil and total_paginas>1:
+        cn1,cn2,cn3=st.columns([1,2,1])
+        with cn1:
+            if st.button("← Anterior",disabled=(pagina<=1),key="inv_prev",use_container_width=True):
+                st.session_state["inv_pagina"]=pagina-1; st.rerun()
+        with cn2:
+            st.markdown(f'<div style="text-align:center;color:var(--t3);padding-top:.45rem;font-size:.82rem;">Página {pagina} de {total_paginas}</div>',unsafe_allow_html=True)
+        with cn3:
+            if st.button("Próxima →",disabled=(pagina>=total_paginas),key="inv_next",use_container_width=True):
+                st.session_state["inv_pagina"]=pagina+1; st.rerun()
+
+    st.markdown("</div>",unsafe_allow_html=True)
+    if fil:
+        st.markdown("**📊 Ver histórico de movimentações por produto:**")
+        pm={f"{p['nome']} ({p['codigo_interno']})":p for p in fil}
+        cs,cb=st.columns([4,1])
+        with cs: sel=st.selectbox("Produto",list(pm.keys()),key="sel_hist",label_visibility="collapsed")
+        with cb:
+            if st.button("📊 Ver Histórico",use_container_width=True,key="btn_hist"): st.session_state["hist_produto"]=pm[sel]; st.rerun()
+    if st.session_state.get("hist_produto"): _hist_modal(st.session_state["hist_produto"])
+
+    if st.session_state.get("foto_produto"): _foto_modal(st.session_state["foto_produto"])
