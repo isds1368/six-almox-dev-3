@@ -32,8 +32,6 @@ STATUS_COMPRA_OPCOES = [
     "Cancelado",
 ]
 
-HIST_ITENS_PAGINA_OPCOES = [10, 20, 40]
-
 # Cores de badge por status de andamento
 _COR_STATUS = {
     "Requisição enviada ao CNR": ("var(--info)",  "📋"),
@@ -480,7 +478,6 @@ def _aprovar_unificado():
                             "qtd_original": qtd_original,
                             "qtd_aprovada": qtd_aprovada,
                             "motivo_ajuste": motivo_ajuste.strip(),
-                            "obs_original": s.get("observacao") or "",
                         }
                         st.rerun()
             with c4:
@@ -791,13 +788,14 @@ def _popup_confirmacao(u):
 
                 if (acao == "aprovar" and conf.get("qtd_aprovada") is not None
                         and conf["qtd_aprovada"] != conf.get("qtd_original")):
-                    nota = (f'[AJUSTE NA APROVAÇÃO] Quantidade solicitada '
-                            f'{qtd_br(conf["qtd_original"])} → aprovada {qtd_br(conf["qtd_aprovada"])} '
-                            f'{conf["un"]}. Motivo: {conf.get("motivo_ajuste","")}')
-                    obs_atual = (conf.get("obs_original") or "").strip()
+                    # Registrado no mesmo campo (motivo_saida) usado pela Saída Manual,
+                    # com o histórico de quanto foi solicitado x aprovado para rastreabilidade.
+                    nota = (f'Ajustado na aprovação: {qtd_br(conf["qtd_original"])} → '
+                            f'{qtd_br(conf["qtd_aprovada"])} {conf["un"]}. '
+                            f'Motivo: {conf.get("motivo_ajuste","")}')
                     dados["quantidade_informada"]  = conf["qtd_aprovada"]
                     dados["quantidade_convertida"]  = conf["qtd_aprovada"]
-                    dados["observacao"]             = f"{obs_atual}\n{nota}" if obs_atual else nota
+                    dados["motivo_saida"]           = nota
 
                 sb = get_sb()
                 resp = sb.table("movimentacoes").update(dados).eq("id", conf["id"]).execute()
@@ -819,134 +817,57 @@ def _popup_confirmacao(u):
 # ── Histórico completo (almoxarife/admin) ────────────────────────────────────
 
 def _hist_completo():
-    """Histórico unificado: almoxarifado + compras na mesma tabela, com filtros
-    (nome, data, tipo) e paginação (10/20/40 itens por página)."""
+    """Histórico unificado: almoxarifado + compras na mesma tabela, ordenados por data."""
     todas = _listar_unificadas()
 
     st.markdown('<div class="card"><div class="card-h">📋 Histórico — Todas as Solicitações</div>', unsafe_allow_html=True)
-
     if not todas:
         st.info("Nenhuma solicitação registrada.")
-        st.markdown("</div>", unsafe_allow_html=True)
-        return
+    else:
+        rows = ""
+        for m in todas:
+            origem = m.get("origem", "almox")
+            b      = badge(m["status"].capitalize(), m["status"])
+            data   = datahora_br(m["criado_em"])
+            setor  = esc(m.get("setor_solicitante", "—"))
+            solicit = esc(m.get("nome_solicitante", "—"))
 
-    # ── Filtros ──────────────────────────────────────────────────────────
-    fc1, fc2, fc3, fc4 = st.columns([2.5, 2, 2, 1.5])
-    with fc1:
-        filtro_nome = st.text_input(
-            "🔎 Solicitante", key="hist_filtro_nome", placeholder="Buscar por nome...",
-        )
-    with fc2:
-        filtro_data = st.date_input(
-            "📅 Data", value=None, key="hist_filtro_data", format="DD/MM/YYYY",
-        )
-    with fc3:
-        filtro_tipo = st.selectbox(
-            "🏷️ Tipo", ["Todos", "Almoxarifado", "Compra"], key="hist_filtro_tipo",
-        )
-    with fc4:
-        itens_pag = st.selectbox(
-            "Itens/página", HIST_ITENS_PAGINA_OPCOES, key="hist_itens_pag",
-        )
+            motivo_html = ""
+            if m.get("status") == "rejeitado" and m.get("motivo_rejeicao"):
+                motivo_html = (f'<br><span style="font-size:.7rem;color:var(--err);">'
+                               f'💬 {esc_trunc(m["motivo_rejeicao"], 50)}</span>')
+            elif origem == "almox" and m.get("motivo_saida"):
+                motivo_html = (f'<br><span style="font-size:.7rem;color:var(--warn);">'
+                               f'✏️ {esc_trunc(m["motivo_saida"], 50)}</span>')
 
-    # ── Aplica filtros ───────────────────────────────────────────────────
-    filtrados = todas
-    if filtro_nome.strip():
-        termo = filtro_nome.strip().lower()
-        filtrados = [m for m in filtrados if termo in (m.get("nome_solicitante") or "").lower()]
-    if filtro_data:
-        data_str = filtro_data.isoformat()
-        filtrados = [m for m in filtrados if (m.get("criado_em") or "")[:10] == data_str]
-    if filtro_tipo == "Almoxarifado":
-        filtrados = [m for m in filtrados if m.get("origem") == "almox"]
-    elif filtro_tipo == "Compra":
-        filtrados = [m for m in filtrados if m.get("origem") == "compra"]
+            if origem == "almox":
+                prod   = m.get("produto") or {}
+                un_lbl = sigla_para_opcao(m.get("unidade_informada", "UN"))
+                tipo_badge = '<span style="font-size:.68rem;color:var(--t3);">🏪 Almox</span>'
+                descricao  = f'<strong>{esc(prod.get("nome","—"))}</strong>'
+                detalhe    = f'{qtd_br(m["quantidade_informada"])} {un_lbl}'
+            else:
+                cod        = esc(m.get("codigo_requisicao") or "—")
+                sc_status  = esc(m.get("status_compra") or "—")
+                tipo_badge = '<span style="font-size:.68rem;color:var(--info);">🛒 Compra</span>'
+                descricao  = f'<strong>{esc(m.get("produto_descricao","—"))}</strong>'
+                detalhe    = f'#{cod} · {sc_status}'
 
-    # Reinicia a página quando algum filtro (ou o nº de itens/página) muda
-    assinatura_filtros = (filtro_nome, str(filtro_data), filtro_tipo, itens_pag)
-    if st.session_state.get("hist_filtro_assinatura") != assinatura_filtros:
-        st.session_state["hist_filtro_assinatura"] = assinatura_filtros
-        st.session_state["hist_pagina"] = 1
-
-    total = len(filtrados)
-
-    if total == 0:
+            rows += (
+                f'<tr>'
+                f'<td style="color:var(--t3);font-size:.73rem;">{data}</td>'
+                f'<td>{tipo_badge}<br>{descricao}</td>'
+                f'<td style="font-size:.78rem;color:var(--t3);">{detalhe}</td>'
+                f'<td>{setor}</td>'
+                f'<td>{solicit}</td>'
+                f'<td>{b}{motivo_html}</td>'
+                f'</tr>'
+            )
         st.markdown(
-            '<p style="color:var(--t3);font-size:.82rem;">'
-            'Nenhuma solicitação encontrada com os filtros aplicados.</p>',
+            f'<table class="tbl"><thead><tr>'
+            f'<th>Data</th><th>Tipo / Produto</th><th>Detalhe</th>'
+            f'<th>Setor</th><th>Solicitante</th><th>Status</th>'
+            f'</tr></thead><tbody>{rows}</tbody></table>',
             unsafe_allow_html=True,
         )
-        st.markdown("</div>", unsafe_allow_html=True)
-        return
-
-    total_paginas = max(1, -(-total // itens_pag))  # ceil division
-    pagina_atual  = min(max(1, st.session_state.get("hist_pagina", 1)), total_paginas)
-    st.session_state["hist_pagina"] = pagina_atual
-
-    inicio = (pagina_atual - 1) * itens_pag
-    fim    = inicio + itens_pag
-    pagina_itens = filtrados[inicio:fim]
-
-    rows = ""
-    for m in pagina_itens:
-        origem = m.get("origem", "almox")
-        b      = badge(m["status"].capitalize(), m["status"])
-        data   = datahora_br(m["criado_em"])
-        setor  = esc(m.get("setor_solicitante", "—"))
-        solicit = esc(m.get("nome_solicitante", "—"))
-
-        motivo_html = ""
-        if m.get("status") == "rejeitado" and m.get("motivo_rejeicao"):
-            motivo_html = (f'<br><span style="font-size:.7rem;color:var(--err);">'
-                           f'💬 {esc_trunc(m["motivo_rejeicao"], 50)}</span>')
-
-        if origem == "almox":
-            prod   = m.get("produto") or {}
-            un_lbl = sigla_para_opcao(m.get("unidade_informada", "UN"))
-            tipo_badge = '<span style="font-size:.68rem;color:var(--t3);">🏪 Almox</span>'
-            descricao  = f'<strong>{esc(prod.get("nome","—"))}</strong>'
-            detalhe    = f'{qtd_br(m["quantidade_informada"])} {un_lbl}'
-        else:
-            cod        = esc(m.get("codigo_requisicao") or "—")
-            sc_status  = esc(m.get("status_compra") or "—")
-            tipo_badge = '<span style="font-size:.68rem;color:var(--info);">🛒 Compra</span>'
-            descricao  = f'<strong>{esc(m.get("produto_descricao","—"))}</strong>'
-            detalhe    = f'#{cod} · {sc_status}'
-
-        rows += (
-            f'<tr>'
-            f'<td style="color:var(--t3);font-size:.73rem;">{data}</td>'
-            f'<td>{tipo_badge}<br>{descricao}</td>'
-            f'<td style="font-size:.78rem;color:var(--t3);">{detalhe}</td>'
-            f'<td>{setor}</td>'
-            f'<td>{solicit}</td>'
-            f'<td>{b}{motivo_html}</td>'
-            f'</tr>'
-        )
-    st.markdown(
-        f'<table class="tbl"><thead><tr>'
-        f'<th>Data</th><th>Tipo / Produto</th><th>Detalhe</th>'
-        f'<th>Setor</th><th>Solicitante</th><th>Status</th>'
-        f'</tr></thead><tbody>{rows}</tbody></table>',
-        unsafe_allow_html=True,
-    )
-
-    # ── Paginação ────────────────────────────────────────────────────────
-    st.markdown('<div class="div" style="margin:.6rem 0;"></div>', unsafe_allow_html=True)
-    pc1, pc2, pc3 = st.columns([1, 2, 1])
-    with pc1:
-        if st.button("← Anterior", disabled=(pagina_atual <= 1), key="hist_pag_ant", use_container_width=True):
-            st.session_state["hist_pagina"] = pagina_atual - 1
-            st.rerun()
-    with pc2:
-        st.markdown(
-            f'<p style="text-align:center;font-size:.8rem;color:var(--t3);margin-top:.4rem;">'
-            f'Página {pagina_atual} de {total_paginas} · {total} solicitação(ões)</p>',
-            unsafe_allow_html=True,
-        )
-    with pc3:
-        if st.button("Próxima →", disabled=(pagina_atual >= total_paginas), key="hist_pag_prox", use_container_width=True):
-            st.session_state["hist_pagina"] = pagina_atual + 1
-            st.rerun()
-
     st.markdown("</div>", unsafe_allow_html=True)
