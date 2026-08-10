@@ -15,7 +15,6 @@ from pages.notas import tela_notas
 from pages.usuarios import tela_usuarios
 from pages.configuracoes import tela_configuracoes
 from pages.controle import main as tela_controle
-from pages.previsao import main as tela_previsao
 
 def main():
     inject_css()
