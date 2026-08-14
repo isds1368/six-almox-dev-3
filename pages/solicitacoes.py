@@ -814,6 +814,38 @@ def _popup_confirmacao(u):
             st.rerun()
 
 
+# ── Reverter aprovação/rejeição (linha de defesa contra erros) ───────────────
+
+def _reverter_solicitacao(item_id, tipo: str) -> bool:
+    """Reverte uma solicitação aprovada/rejeitada de volta para 'pendente',
+    devolvendo-a tal como está para a aba Aprovar/Rejeitar."""
+    sb = get_sb()
+    try:
+        if tipo == "compra":
+            dados = {
+                "status":                    "pendente",
+                "usuario_autorizador":       None,
+                "data_autorizacao":          None,
+                "motivo_rejeicao":           None,
+                "status_compra":             None,
+                "notificacao_compra_lida":   True,
+                "notificacao_status_lida":   True,
+            }
+            resp = sb.table("solicitacoes_compra").update(dados).eq("id", item_id).execute()
+        else:
+            dados = {
+                "status":              "pendente",
+                "usuario_autorizador": None,
+                "data_autorizacao":    None,
+                "motivo_rejeicao":     None,
+                "notificacao_lida":    True,
+            }
+            resp = sb.table("movimentacoes").update(dados).eq("id", item_id).execute()
+        return bool(resp and resp.data)
+    except Exception:
+        return False
+
+
 # ── Histórico completo (almoxarife/admin) ────────────────────────────────────
 
 def _hist_completo():
@@ -870,4 +902,58 @@ def _hist_completo():
             f'</tr></thead><tbody>{rows}</tbody></table>',
             unsafe_allow_html=True,
         )
+
+        # ── Reverter uma aprovação/rejeição ──────────────────────────────────
+        revertiveis = [m for m in todas if m.get("status") in ("aprovado", "rejeitado")]
+        if revertiveis:
+            with st.expander("↩️ Reverter uma aprovação/rejeição"):
+                st.caption(
+                    "Linha de defesa contra erros: devolve a solicitação, do jeito "
+                    "que está, para a aba Aprovar/Rejeitar."
+                )
+                opcoes = {}
+                for m in revertiveis:
+                    origem = m.get("origem", "almox")
+                    if origem == "almox":
+                        desc = (m.get("produto") or {}).get("nome", "—")
+                    else:
+                        desc = m.get("produto_descricao", "—")
+                    label = (
+                        f"{'🏪' if origem == 'almox' else '🛒'} {esc_trunc(desc, 40)} — "
+                        f"{esc(m.get('nome_solicitante', '—'))} — "
+                        f"{datahora_br(m['criado_em'])} — {m['status'].capitalize()}"
+                    )
+                    opcoes[label] = (m["id"], origem)
+
+                escolha = st.selectbox(
+                    "Selecione a solicitação", list(opcoes.keys()), key="revert_select"
+                )
+                item_id, tipo_rev = opcoes[escolha]
+
+                if st.session_state.get("revert_pendente") == item_id:
+                    st.warning(
+                        "⚠️ Confirma reverter esta solicitação para **Pendente**? "
+                        "Ela voltará para a aba Aprovar/Rejeitar."
+                    )
+                    cc1, cc2, _ = st.columns([1, 1, 3])
+                    with cc1:
+                        if st.button(
+                            "✅ Sim, reverter", type="primary",
+                            use_container_width=True, key="revert_confirma",
+                        ):
+                            if _reverter_solicitacao(item_id, tipo_rev):
+                                st.success("↩️ Solicitação revertida para Pendente!")
+                                del st.session_state["revert_pendente"]
+                                st.rerun()
+                            else:
+                                st.error("❌ Não foi possível reverter. Tente novamente.")
+                    with cc2:
+                        if st.button("Cancelar", use_container_width=True, key="revert_cancela"):
+                            del st.session_state["revert_pendente"]
+                            st.rerun()
+                else:
+                    if st.button("↩️ Reverter para Pendente", key="revert_iniciar"):
+                        st.session_state["revert_pendente"] = item_id
+                        st.rerun()
+
     st.markdown("</div>", unsafe_allow_html=True)
