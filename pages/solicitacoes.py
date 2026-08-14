@@ -846,7 +846,33 @@ def _reverter_solicitacao(item_id, tipo: str) -> bool:
         return False
 
 
+# ── Popup (modal real) de confirmação de reversão ─────────────────────────────
+
+_dialog = getattr(st, "dialog", None) or getattr(st, "experimental_dialog", None)
+
+
+@_dialog("↩️ Reverter Solicitação")
+def _dialog_reverter(item_id, tipo: str, resumo: str):
+    st.write("Tem certeza que deseja reverter esta solicitação para **Pendente**?")
+    st.caption(resumo)
+    st.caption("Ela voltará, do jeito que está, para a aba Aprovar/Rejeitar.")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("✅ Sim, reverter", type="primary", use_container_width=True, key="revert_confirma"):
+            if _reverter_solicitacao(item_id, tipo):
+                st.success("↩️ Solicitação revertida para Pendente!")
+                st.rerun()
+            else:
+                st.error("❌ Não foi possível reverter. Tente novamente.")
+    with c2:
+        if st.button("Cancelar", use_container_width=True, key="revert_cancela"):
+            st.rerun()
+
+
 # ── Histórico completo (almoxarife/admin) ────────────────────────────────────
+
+_HIST_COLS = [1.1, 2.3, 1.6, 1, 1.2, 1.6, 0.6]
+
 
 def _hist_completo():
     """Histórico unificado: almoxarifado + compras na mesma tabela, ordenados por data."""
@@ -855,105 +881,66 @@ def _hist_completo():
     st.markdown('<div class="card"><div class="card-h">📋 Histórico — Todas as Solicitações</div>', unsafe_allow_html=True)
     if not todas:
         st.info("Nenhuma solicitação registrada.")
-    else:
-        rows = ""
-        for m in todas:
-            origem = m.get("origem", "almox")
-            b      = badge(m["status"].capitalize(), m["status"])
-            data   = datahora_br(m["criado_em"])
-            setor  = esc(m.get("setor_solicitante", "—"))
-            solicit = esc(m.get("nome_solicitante", "—"))
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
 
-            motivo_html = ""
-            if m.get("status") == "rejeitado" and m.get("motivo_rejeicao"):
-                motivo_html = (f'<br><span style="font-size:.7rem;color:var(--err);">'
-                               f'💬 {esc_trunc(m["motivo_rejeicao"], 50)}</span>')
-            elif origem == "almox" and m.get("motivo_saida"):
-                motivo_html = (f'<br><span style="font-size:.7rem;color:var(--warn);">'
-                               f'✏️ {esc_trunc(m["motivo_saida"], 50)}</span>')
-
-            if origem == "almox":
-                prod   = m.get("produto") or {}
-                un_lbl = sigla_para_opcao(m.get("unidade_informada", "UN"))
-                tipo_badge = '<span style="font-size:.68rem;color:var(--t3);">🏪 Almox</span>'
-                descricao  = f'<strong>{esc(prod.get("nome","—"))}</strong>'
-                detalhe    = f'{qtd_br(m["quantidade_informada"])} {un_lbl}'
-            else:
-                cod        = esc(m.get("codigo_requisicao") or "—")
-                sc_status  = esc(m.get("status_compra") or "—")
-                tipo_badge = '<span style="font-size:.68rem;color:var(--info);">🛒 Compra</span>'
-                descricao  = f'<strong>{esc(m.get("produto_descricao","—"))}</strong>'
-                detalhe    = f'#{cod} · {sc_status}'
-
-            rows += (
-                f'<tr>'
-                f'<td style="color:var(--t3);font-size:.73rem;">{data}</td>'
-                f'<td>{tipo_badge}<br>{descricao}</td>'
-                f'<td style="font-size:.78rem;color:var(--t3);">{detalhe}</td>'
-                f'<td>{setor}</td>'
-                f'<td>{solicit}</td>'
-                f'<td>{b}{motivo_html}</td>'
-                f'</tr>'
-            )
-        st.markdown(
-            f'<table class="tbl"><thead><tr>'
-            f'<th>Data</th><th>Tipo / Produto</th><th>Detalhe</th>'
-            f'<th>Setor</th><th>Solicitante</th><th>Status</th>'
-            f'</tr></thead><tbody>{rows}</tbody></table>',
+    hcols = st.columns(_HIST_COLS)
+    for h, label in zip(hcols, ("Data", "Tipo / Produto", "Detalhe", "Setor", "Solicitante", "Status", "")):
+        h.markdown(
+            f'<span style="font-size:.72rem;font-weight:700;color:var(--t3);">{label}</span>',
             unsafe_allow_html=True,
         )
+    st.markdown('<div class="div"></div>', unsafe_allow_html=True)
 
-        # ── Reverter uma aprovação/rejeição ──────────────────────────────────
-        revertiveis = [m for m in todas if m.get("status") in ("aprovado", "rejeitado")]
-        if revertiveis:
-            with st.expander("↩️ Reverter uma aprovação/rejeição"):
-                st.caption(
-                    "Linha de defesa contra erros: devolve a solicitação, do jeito "
-                    "que está, para a aba Aprovar/Rejeitar."
-                )
-                opcoes = {}
-                for m in revertiveis:
-                    origem = m.get("origem", "almox")
-                    if origem == "almox":
-                        desc = (m.get("produto") or {}).get("nome", "—")
-                    else:
-                        desc = m.get("produto_descricao", "—")
-                    label = (
-                        f"{'🏪' if origem == 'almox' else '🛒'} {esc_trunc(desc, 40)} — "
-                        f"{esc(m.get('nome_solicitante', '—'))} — "
-                        f"{datahora_br(m['criado_em'])} — {m['status'].capitalize()}"
-                    )
-                    opcoes[label] = (m["id"], origem)
+    for m in todas:
+        origem  = m.get("origem", "almox")
+        b       = badge(m["status"].capitalize(), m["status"])
+        data    = datahora_br(m["criado_em"])
+        setor   = esc(m.get("setor_solicitante", "—"))
+        solicit = esc(m.get("nome_solicitante", "—"))
 
-                escolha = st.selectbox(
-                    "Selecione a solicitação", list(opcoes.keys()), key="revert_select"
-                )
-                item_id, tipo_rev = opcoes[escolha]
+        motivo_html = ""
+        if m.get("status") == "rejeitado" and m.get("motivo_rejeicao"):
+            motivo_html = (f'<br><span style="font-size:.7rem;color:var(--err);">'
+                           f'💬 {esc_trunc(m["motivo_rejeicao"], 50)}</span>')
+        elif origem == "almox" and m.get("motivo_saida"):
+            motivo_html = (f'<br><span style="font-size:.7rem;color:var(--warn);">'
+                           f'✏️ {esc_trunc(m["motivo_saida"], 50)}</span>')
 
-                if st.session_state.get("revert_pendente") == item_id:
-                    st.warning(
-                        "⚠️ Confirma reverter esta solicitação para **Pendente**? "
-                        "Ela voltará para a aba Aprovar/Rejeitar."
-                    )
-                    cc1, cc2, _ = st.columns([1, 1, 3])
-                    with cc1:
-                        if st.button(
-                            "✅ Sim, reverter", type="primary",
-                            use_container_width=True, key="revert_confirma",
-                        ):
-                            if _reverter_solicitacao(item_id, tipo_rev):
-                                st.success("↩️ Solicitação revertida para Pendente!")
-                                del st.session_state["revert_pendente"]
-                                st.rerun()
-                            else:
-                                st.error("❌ Não foi possível reverter. Tente novamente.")
-                    with cc2:
-                        if st.button("Cancelar", use_container_width=True, key="revert_cancela"):
-                            del st.session_state["revert_pendente"]
-                            st.rerun()
-                else:
-                    if st.button("↩️ Reverter para Pendente", key="revert_iniciar"):
-                        st.session_state["revert_pendente"] = item_id
-                        st.rerun()
+        if origem == "almox":
+            prod       = m.get("produto") or {}
+            un_lbl     = sigla_para_opcao(m.get("unidade_informada", "UN"))
+            tipo_badge = '<span style="font-size:.68rem;color:var(--t3);">🏪 Almox</span>'
+            nome_prod  = prod.get("nome", "—")
+            descricao  = f'<strong>{esc(nome_prod)}</strong>'
+            detalhe    = f'{qtd_br(m["quantidade_informada"])} {un_lbl}'
+        else:
+            cod        = esc(m.get("codigo_requisicao") or "—")
+            sc_status  = esc(m.get("status_compra") or "—")
+            tipo_badge = '<span style="font-size:.68rem;color:var(--info);">🛒 Compra</span>'
+            nome_prod  = m.get("produto_descricao", "—")
+            descricao  = f'<strong>{esc(nome_prod)}</strong>'
+            detalhe    = f'#{cod} · {sc_status}'
+
+        c1, c2, c3, c4, c5, c6, c7 = st.columns(_HIST_COLS)
+        with c1:
+            st.markdown(f'<span style="font-size:.73rem;color:var(--t3);">{data}</span>', unsafe_allow_html=True)
+        with c2:
+            st.markdown(f'{tipo_badge}<br>{descricao}', unsafe_allow_html=True)
+        with c3:
+            st.markdown(f'<span style="font-size:.78rem;color:var(--t3);">{detalhe}</span>', unsafe_allow_html=True)
+        with c4:
+            st.markdown(f'<span style="font-size:.78rem;">{setor}</span>', unsafe_allow_html=True)
+        with c5:
+            st.markdown(f'<span style="font-size:.78rem;">{solicit}</span>', unsafe_allow_html=True)
+        with c6:
+            st.markdown(f'{b}{motivo_html}', unsafe_allow_html=True)
+        with c7:
+            if m.get("status") in ("aprovado", "rejeitado"):
+                if st.button("↩️", key=f"rev_{origem}_{m['id']}", help="Reverter para pendente"):
+                    resumo = f"{esc_trunc(nome_prod, 40)} — {m.get('nome_solicitante','—')} — {data}"
+                    _dialog_reverter(m["id"], origem, resumo)
+
+        st.markdown('<div class="div"></div>', unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
