@@ -461,3 +461,22 @@ def historico_saidas_previsao(dias: int = 120) -> list:
     except Exception as e:
         _log.error("historico_saidas_previsao: %s", e)
         return []
+
+def historico_entradas_previsao(dias: int = 120) -> list:
+    """Retorna entradas concluídas dos últimos N dias (id do produto, data,
+    quantidade), pra alimentar a reconstrução de nível de serviço em
+    pages/previsao.py. Exclui ajustes manuais (tipo_entrada='Ajuste Manual' —
+    ver estoque.py), mesmo critério usado em historico_saidas_previsao."""
+    try:
+        from datetime import datetime, timedelta
+        lim = (datetime.utcnow() - timedelta(days=dias)).isoformat()
+        return (get_sb().table("movimentacoes")
+                .select("criado_em,produto_id,quantidade_convertida")
+                .eq("tipo","entrada").eq("status","concluido")
+                .or_("tipo_entrada.is.null,tipo_entrada.neq.Ajuste Manual")
+                .gte("criado_em", lim)
+                .order("criado_em", desc=False)
+                .execute().data or [])
+    except Exception as e:
+        _log.error("historico_entradas_previsao: %s", e)
+        return []
