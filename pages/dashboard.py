@@ -3,7 +3,7 @@ import io
 import datetime
 import plotly.graph_objects as go
 import streamlit as st
-from utils.database import stats_dashboard, consumo_por_periodo, listar_setores, listar_movimentacoes
+from utils.database import stats_dashboard, consumo_por_periodo, listar_setores, listar_movimentacoes, historico_saidas_previsao
 from utils.ui import badge, kpi_html, status_estoque
 from utils.fmt import qtd_br, datahora_br, data_br
 
@@ -62,6 +62,10 @@ def tela_dashboard():
     if s["pend_notas"]:
         st.info(f"🔵 **{s['pend_notas']} nota(s)** pendentes de envio ao financeiro.")
 
+    # ── Insumos Essenciais (prioridade) ─────────────────────────────
+    _saude_essenciais(s["produtos"])
+    _reposicao_essenciais(s["produtos"])
+
     # ── Gráficos gerais ───────────────────────────────────────────
     c1, c2 = st.columns([1.4, 1])
     with c1: _consumo_geral(s["consumo_setor"])
@@ -74,6 +78,149 @@ def tela_dashboard():
     # ── Análise de consumo por período ───────────────────────────
     _secao_consumo_periodo()
 
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ── Saúde do estoque — insumos essenciais ───────────────────────
+
+def _saude_essenciais(produtos):
+    essenciais = [p for p in produtos if p.get("essencial")]
+    st.markdown(
+        '<div class="card"><div class="card-h">⭐ Saúde do Estoque — Insumos Essenciais</div>',
+        unsafe_allow_html=True,
+    )
+    if not essenciais:
+        st.markdown(
+            '<p style="color:var(--t3);font-size:.82rem;text-align:center;padding:1rem">'
+            'Nenhum insumo classificado como essencial ainda. Classifique em '
+            '<strong>Estoque → ⭐ Essenciais</strong>.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    nomes, percentuais, cores, hover_txt = [], [], [], []
+    for p in essenciais:
+        est  = float(p.get("quantidade_total_secundaria") or 0)
+        minp = float(p.get("estoque_minimo_primario") or 0)
+        fat  = float(p.get("fator_conversao") or 1)
+        min_sec = minp * fat
+        # saúde = estoque atual em relação a 2x o mínimo (folga de segurança), capado em 100%
+        alvo = min_sec * 2 if min_sec > 0 else max(est, 1)
+        pct = min(100.0, (est / alvo * 100) if alvo > 0 else 100.0)
+        nome = p["nome"]
+        nomes.append(nome[:22] + ("…" if len(nome) > 22 else ""))
+        percentuais.append(round(pct, 1))
+        if est <= 0:        cores.append("#DC2626")
+        elif est <= min_sec: cores.append("#D97706")
+        else:                cores.append("#16A34A")
+        hover_txt.append(f"{qtd_br(est)} / mín {qtd_br(min_sec)} {p.get('unidade_secundaria','')}")
+
+    fig = go.Figure(go.Bar(
+        x=nomes, y=percentuais,
+        marker=dict(color=cores, line=dict(width=0)),
+        text=[f"{v:.0f}%" for v in percentuais], textposition="outside",
+        customdata=hover_txt,
+        hovertemplate="<b>%{x}</b><br>Saúde: %{y:.0f}%<br>%{customdata}<extra></extra>",
+    ))
+    fig.update_layout(
+        **_PL, height=260,
+        xaxis=dict(gridcolor="rgba(0,0,0,.05)", tickfont=dict(size=10),
+                   tickangle=-30 if len(nomes) > 6 else 0),
+        yaxis=dict(gridcolor="rgba(0,0,0,.05)", range=[0, 115], ticksuffix="%"),
+        showlegend=False,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.markdown(
+        '<div style="font-size:.72rem;color:var(--t3);margin-top:.3rem;">'
+        '🟢 Saudável &nbsp;·&nbsp; 🟠 Abaixo do mínimo &nbsp;·&nbsp; 🔴 Zerado</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ── Previsão de reposição — insumos essenciais ──────────────────
+
+def _reposicao_essenciais(produtos):
+    essenciais = [p for p in produtos if p.get("essencial")]
+    st.markdown(
+        '<div class="card"><div class="card-h">📅 Previsão de Reposição — Insumos Essenciais</div>',
+        unsafe_allow_html=True,
+    )
+    if not essenciais:
+        st.markdown(
+            '<p style="color:var(--t3);font-size:.82rem;text-align:center;padding:1rem">'
+            'Nenhum insumo essencial classificado.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    dias_janela = 90
+    hist = historico_saidas_previsao(dias=dias_janela)
+    consumo_por_produto = {}
+    for m in hist:
+        pid = m.get("produto_id")
+        if not pid: continue
+        consumo_por_produto[pid] = consumo_por_produto.get(pid, 0.0) + float(m.get("quantidade_convertida") or 0)
+
+    hoje = datetime.date.today()
+    linhas = []
+    for p in essenciais:
+        est  = float(p.get("quantidade_total_secundaria") or 0)
+        minp = float(p.get("estoque_minimo_primario") or 0)
+        fat  = float(p.get("fator_conversao") or 1)
+        min_sec = minp * fat
+        un = p.get("unidade_secundaria", "UN")
+        consumo_total  = consumo_por_produto.get(p["id"], 0.0)
+        consumo_diario = consumo_total / dias_janela if dias_janela else 0.0
+        if consumo_diario > 0:
+            dias_restantes = (est - min_sec) / consumo_diario
+            data_prevista  = hoje + datetime.timedelta(days=max(0, round(dias_restantes)))
+            linhas.append({"nome": p["nome"], "est": est, "un": un, "consumo_dia": consumo_diario,
+                            "dias": dias_restantes, "data": data_prevista,
+                            "urgente": dias_restantes <= 0, "sem_dados": False})
+        else:
+            linhas.append({"nome": p["nome"], "est": est, "un": un, "consumo_dia": 0.0,
+                            "dias": None, "data": None, "urgente": False, "sem_dados": True})
+
+    def _chave(l):
+        if l["sem_dados"]: return (2, 0)
+        if l["urgente"]:   return (0, l["dias"])
+        return (1, l["dias"])
+    linhas.sort(key=_chave)
+
+    rows = ""
+    for l in linhas:
+        if l["sem_dados"]:
+            situacao = '<span style="color:var(--t3);">Sem consumo recente</span>'
+            data_txt = "—"
+        elif l["urgente"]:
+            situacao = '<span style="color:var(--err);font-weight:700;">🔴 Repor agora</span>'
+            data_txt = data_br(l["data"])
+        else:
+            situacao = f'<span style="color:var(--t3);">em {round(l["dias"])} dia(s)</span>'
+            data_txt = data_br(l["data"])
+        rows += (
+            f'<tr>'
+            f'<td><strong>{l["nome"]}</strong></td>'
+            f'<td class="mono">{qtd_br(l["est"])} {l["un"]}</td>'
+            f'<td class="mono">{qtd_br(l["consumo_dia"])} {l["un"]}/dia</td>'
+            f'<td>{situacao}</td>'
+            f'<td style="color:var(--t3);">{data_txt}</td>'
+            f'</tr>'
+        )
+    st.markdown(
+        f'<table class="tbl"><thead><tr>'
+        f'<th>Produto</th><th>Estoque Atual</th><th>Consumo Médio</th><th>Situação</th><th>Repor até</th>'
+        f'</tr></thead><tbody>{rows}</tbody></table>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div style="font-size:.72rem;color:var(--t3);margin-top:.5rem;">'
+        f'Cálculo baseado no consumo médio dos últimos {dias_janela} dias de movimentação.</div>',
+        unsafe_allow_html=True,
+    )
     st.markdown("</div>", unsafe_allow_html=True)
 
 
