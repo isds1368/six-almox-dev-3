@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from utils.database import (listar_produtos, listar_categorias, atualizar_produto,
     registrar_movimentacao, listar_movimentacoes, historico_produto, listar_solicitacoes)
+from utils.database import listar_produtos_essenciais  # noqa: F401 (reexportado para uso em outras telas, ex. previsão)
 from utils.auth import sessao, is_admin, is_almoxarife
 from utils.ui import badge, status_estoque, kpi_html
 from utils.fmt import qtd_br, datahora_br
@@ -37,6 +38,7 @@ def _planilha_estoque(prods):
             "Unidade Primária":      sigla_para_opcao(p["unidade_primaria"]),
             "Estoque Mínimo (Prim.)":round(minp,2),
             "Status":                status,
+            "Essencial":             "⭐ Sim" if p.get("essencial") else "Não",
             "Ativo":                 "Sim" if p.get("ativo",True) else "Não",
         })
     df=pd.DataFrame(linhas)
@@ -53,16 +55,24 @@ def _planilha_estoque(prods):
 def tela_estoque():
     st.markdown('<div class="pg">',unsafe_allow_html=True)
     st.markdown('<div class="pg-title">📦 Controle de Estoque</div><div class="pg-sub">Inventário com conversão de unidades</div>',unsafe_allow_html=True)
+    pode_classificar = is_admin() or is_almoxarife()
     tabs=["Inventário"]
+    if pode_classificar: tabs+=["⭐ Essenciais"]
     if is_admin(): tabs+=["Ajuste Manual","Editar Produto"]
     tabs+=["Histórico de Ajustes"]
     tl=st.tabs(tabs)
-    with tl[0]: _inv()
+    idx=0
+    with tl[idx]: _inv()
+    idx+=1
+    if pode_classificar:
+        with tl[idx]: _classificar_essenciais()
+        idx+=1
     if is_admin():
-        with tl[1]: _ajuste()
-        with tl[2]: _editar()
-        with tl[3]: _hist_aj()
-    else: tl[1]; _hist_aj()
+        with tl[idx]: _ajuste()
+        idx+=1
+        with tl[idx]: _editar()
+        idx+=1
+    with tl[idx]: _hist_aj()
     st.markdown("</div>",unsafe_allow_html=True)
 
 def _inv():
@@ -143,7 +153,8 @@ def _inv():
             res_qtd=reservas.get(p["id"],0.0) if ver_reserva else 0.0
             res_html=f'<br><span style="font-size:.7rem;color:var(--warn);font-weight:600;">🔒 Reservado: {qtd_br(res_qtd)} {us_lbl}</span>' if res_qtd>0 else ''
             rc = st.columns(head_ratio)
-            rc[0].markdown(f'<strong>{esc(p["nome"])}</strong>', unsafe_allow_html=True)
+            estrela=' <span title="Insumo essencial" style="color:#D97706;">⭐</span>' if p.get("essencial") else ''
+            rc[0].markdown(f'<strong>{esc(p["nome"])}</strong>{estrela}', unsafe_allow_html=True)
             rc[1].markdown(f'<span class="mono">{esc(p["codigo_interno"])}</span>', unsafe_allow_html=True)
             rc[2].markdown(f'<span class="mono" style="color:var(--t4);">{esc(p.get("ean") or "—")}</span>', unsafe_allow_html=True)
             rc[3].markdown(f'<span style="color:var(--t3);">{esc(cat)}</span>', unsafe_allow_html=True)
@@ -181,6 +192,60 @@ def _inv():
     if st.session_state.get("hist_produto"): _hist_modal(st.session_state["hist_produto"])
 
     if st.session_state.get("foto_produto"): _foto_modal(st.session_state["foto_produto"])
+
+def _classificar_essenciais():
+    """Permite ao almoxarife/admin marcar manualmente quais insumos são essenciais.
+    Essa marcação prioriza o item nos gráficos de saúde de estoque do Dashboard
+    e na Previsão de Demanda."""
+    prods=listar_produtos(); cats=listar_categorias()
+    if not prods: st.info("Nenhum produto."); return
+
+    st.markdown('<div class="card"><div class="card-h">⭐ Classificação de Insumos Essenciais</div>',unsafe_allow_html=True)
+    st.markdown(
+        '<p style="font-size:.82rem;color:var(--t3);margin-top:-.3rem;">'
+        'Marque abaixo os insumos considerados <strong>essenciais</strong> para a operação. '
+        'Itens essenciais recebem prioridade visual no Dashboard e na Previsão de Demanda.</p>',
+        unsafe_allow_html=True,
+    )
+
+    c1,c2,c3=st.columns([3,2,2])
+    with c1: busca=st.text_input("🔍 Buscar",key="ess_busca")
+    with c2: cf=st.selectbox("Categoria",["Todas"]+[c["nome"] for c in cats],key="ess_cat")
+    with c3: sf=st.selectbox("Mostrar",["Todos","Somente Essenciais","Somente Não Essenciais"],key="ess_filtro")
+
+    fil=prods
+    if busca.strip():
+        b=busca.lower(); fil=[p for p in fil if b in p["nome"].lower() or b in p["codigo_interno"].lower()]
+    if cf!="Todas": fil=[p for p in fil if p.get("categorias") and p["categorias"]["nome"]==cf]
+    if sf=="Somente Essenciais": fil=[p for p in fil if p.get("essencial")]
+    elif sf=="Somente Não Essenciais": fil=[p for p in fil if not p.get("essencial")]
+
+    n_ess=sum(1 for p in prods if p.get("essencial"))
+    st.markdown(f'<div style="font-size:.78rem;color:var(--t3);margin:.3rem 0 .7rem;">{n_ess} de {len(prods)} produto(s) marcados como essenciais.</div>',unsafe_allow_html=True)
+
+    if not fil:
+        st.markdown('<div style="text-align:center;color:var(--t3);padding:2rem;">Nenhum resultado</div>', unsafe_allow_html=True)
+        st.markdown("</div>",unsafe_allow_html=True)
+        return
+
+    hc=st.columns([3,1.3,1.6,1.3])
+    for col,txt in zip(hc,["Produto","Código","Categoria","Essencial"]):
+        col.markdown(f'<div style="font-size:.72rem;font-weight:700;color:var(--t3);letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid var(--bdr);padding-bottom:.4rem;margin-bottom:.3rem;">{txt}</div>',unsafe_allow_html=True)
+
+    for p in fil:
+        cat=(p.get("categorias") or {}).get("nome","—")
+        rc=st.columns([3,1.3,1.6,1.3])
+        rc[0].markdown(f'<strong>{esc(p["nome"])}</strong>',unsafe_allow_html=True)
+        rc[1].markdown(f'<span class="mono">{esc(p["codigo_interno"])}</span>',unsafe_allow_html=True)
+        rc[2].markdown(f'<span style="color:var(--t3);">{esc(cat)}</span>',unsafe_allow_html=True)
+        with rc[3]:
+            atual=bool(p.get("essencial"))
+            novo=st.checkbox("Essencial",value=atual,key=f"ess_chk_{p['id']}",label_visibility="collapsed")
+            if novo!=atual:
+                atualizar_produto(p["id"],{"essencial":novo})
+                st.rerun()
+        st.markdown('<hr style="margin:.3rem 0;border:none;border-top:1px solid var(--bdr);">', unsafe_allow_html=True)
+    st.markdown("</div>",unsafe_allow_html=True)
 
 def _hist_modal(prod):
     st.markdown(f'<div class="card"><div class="card-h">📊 Histórico — {esc(prod["nome"])} ({esc(prod["codigo_interno"])})</div>',unsafe_allow_html=True)
@@ -365,12 +430,13 @@ def _editar():
             fe=st.number_input("Fator",value=float(p["fator_conversao"]),min_value=0.001)
             eme=st.number_input("Est. mín (prim)",value=float(p["estoque_minimo_primario"]),min_value=0.0)
             eane=st.text_input("CODIGO DO PRODUTO",value=p.get("ean") or ""); ate=st.checkbox("Ativo",value=p.get("ativo",True))
+            esse=st.checkbox("⭐ Insumo Essencial",value=bool(p.get("essencial")))
         de=st.text_area("Descrição",value=p.get("descricao") or "")
         fote=st.text_input("URL da Foto (opcional)",value=p.get("foto_url") or "",help="Cole o link de uma imagem do produto (ex.: link do Supabase Storage).")
         if fote.strip():
             st.image(fote.strip(),width=160)
         if st.form_submit_button("Salvar →",type="primary"):
-            atualizar_produto(p["id"],{"nome":ne.strip(),"categoria_id":cm.get(ce),"unidade_primaria":upe,"unidade_secundaria":use,"fator_conversao":fe,"estoque_minimo_primario":eme,"ean":eane.strip() or None,"descricao":de.strip() or None,"ativo":ate,"foto_url":fote.strip() or None})
+            atualizar_produto(p["id"],{"nome":ne.strip(),"categoria_id":cm.get(ce),"unidade_primaria":upe,"unidade_secundaria":use,"fator_conversao":fe,"estoque_minimo_primario":eme,"ean":eane.strip() or None,"descricao":de.strip() or None,"ativo":ate,"foto_url":fote.strip() or None,"essencial":esse})
             st.success("✅ Produto atualizado!"); st.rerun()
     st.markdown("</div>",unsafe_allow_html=True)
 
