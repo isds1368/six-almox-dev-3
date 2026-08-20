@@ -55,30 +55,46 @@ def _planilha_estoque(prods):
 def tela_estoque():
     st.markdown('<div class="pg">',unsafe_allow_html=True)
     st.markdown('<div class="pg-title">📦 Controle de Estoque</div><div class="pg-sub">Inventário com conversão de unidades</div>',unsafe_allow_html=True)
-    pode_classificar = is_admin() or is_almoxarife()
     tabs=["Inventário"]
-    if pode_classificar: tabs+=["⭐ Essenciais"]
     if is_admin(): tabs+=["Ajuste Manual","Editar Produto"]
     tabs+=["Histórico de Ajustes"]
     tl=st.tabs(tabs)
-    idx=0
-    with tl[idx]: _inv()
-    idx+=1
-    if pode_classificar:
-        with tl[idx]: _classificar_essenciais()
-        idx+=1
+    with tl[0]: _inv()
     if is_admin():
-        with tl[idx]: _ajuste()
-        idx+=1
-        with tl[idx]: _editar()
-        idx+=1
-    with tl[idx]: _hist_aj()
+        with tl[1]: _ajuste()
+        with tl[2]: _editar()
+        with tl[3]: _hist_aj()
+    else: tl[1]; _hist_aj()
     st.markdown("</div>",unsafe_allow_html=True)
+
+@st.dialog("Confirmar classificação de insumo")
+def _dialog_confirmar_essencial():
+    pend=st.session_state.get("ess_pendente")
+    if not pend:
+        st.rerun(); return
+    acao="marcar" if pend["novo"] else "desmarcar"
+    st.markdown(f'Deseja **{acao}** o insumo **{esc(pend["nome"])}** como essencial?')
+    if pend["novo"]:
+        st.caption("Insumos essenciais recebem prioridade na Saúde de Estoque e na Previsão de Reposição do Dashboard.")
+    else:
+        st.caption("O insumo deixará de aparecer nos painéis de prioridade do Dashboard.")
+    cc1,cc2=st.columns(2)
+    with cc1:
+        if st.button("✅ Confirmar",type="primary",use_container_width=True,key="ess_dialog_confirmar"):
+            atualizar_produto(pend["produto_id"],{"essencial":pend["novo"]})
+            st.session_state.pop("ess_pendente",None)
+            st.rerun()
+    with cc2:
+        if st.button("Cancelar",use_container_width=True,key="ess_dialog_cancelar"):
+            st.session_state.pop(f"ess_sel_{pend['produto_id']}",None)  # reseta a selectbox para o valor salvo
+            st.session_state.pop("ess_pendente",None)
+            st.rerun()
 
 def _inv():
     prods=listar_produtos(); cats=listar_categorias()
     if not prods: st.info("Nenhum produto."); return
     ver_reserva=is_almoxarife()
+    pode_classificar=is_admin() or is_almoxarife()
     reservas={}
     if ver_reserva:
         for s in listar_solicitacoes():
@@ -138,8 +154,8 @@ def _inv():
     fil_pag=fil[ini:fim]
 
     if fil_pag:
-        head_ratio = [2.3, 1.0, 1.1, 1.3, 1.7, 1.2, 1.0, 0.9]
-        heads = ["Produto","Código","EAN","Categoria","Estoque","Mínimo","Status","Foto"]
+        head_ratio = [2.0, 0.9, 1.0, 1.2, 1.6, 1.0, 0.9, 1.1, 0.8]
+        heads = ["Produto","Código","EAN","Categoria","Estoque","Mínimo","Status","Essencial","Foto"]
         hc = st.columns(head_ratio)
         for col, txt in zip(hc, heads):
             col.markdown(
@@ -153,8 +169,7 @@ def _inv():
             res_qtd=reservas.get(p["id"],0.0) if ver_reserva else 0.0
             res_html=f'<br><span style="font-size:.7rem;color:var(--warn);font-weight:600;">🔒 Reservado: {qtd_br(res_qtd)} {us_lbl}</span>' if res_qtd>0 else ''
             rc = st.columns(head_ratio)
-            estrela=' <span title="Insumo essencial" style="color:#D97706;">⭐</span>' if p.get("essencial") else ''
-            rc[0].markdown(f'<strong>{esc(p["nome"])}</strong>{estrela}', unsafe_allow_html=True)
+            rc[0].markdown(f'<strong>{esc(p["nome"])}</strong>', unsafe_allow_html=True)
             rc[1].markdown(f'<span class="mono">{esc(p["codigo_interno"])}</span>', unsafe_allow_html=True)
             rc[2].markdown(f'<span class="mono" style="color:var(--t4);">{esc(p.get("ean") or "—")}</span>', unsafe_allow_html=True)
             rc[3].markdown(f'<span style="color:var(--t3);">{esc(cat)}</span>', unsafe_allow_html=True)
@@ -162,11 +177,23 @@ def _inv():
             rc[5].markdown(f'<span style="color:var(--t3);">{qtd_br(minp)} {up_lbl}</span>', unsafe_allow_html=True)
             rc[6].markdown(badge(txt,cls), unsafe_allow_html=True)
             with rc[7]:
-                if st.button("📷 Foto", key=f"foto_btn_{p['id']}", use_container_width=True):
+                if pode_classificar:
+                    atual_ess=bool(p.get("essencial"))
+                    sel=st.selectbox("Essencial",["Não","Sim"],index=1 if atual_ess else 0,
+                                      key=f"ess_sel_{p['id']}",label_visibility="collapsed")
+                    novo_ess=(sel=="Sim")
+                    if novo_ess!=atual_ess:
+                        st.session_state["ess_pendente"]={"produto_id":p["id"],"nome":p["nome"],"novo":novo_ess}
+                else:
+                    st.markdown('⭐' if p.get("essencial") else '—', unsafe_allow_html=True)
+            with rc[8]:
+                if st.button("📷", key=f"foto_btn_{p['id']}", use_container_width=True, help="Ver/gerenciar foto"):
                     st.session_state["foto_produto"]=p
                     st.session_state.pop("foto_modo",None)
                     st.rerun()
             st.markdown('<hr style="margin:.35rem 0;border:none;border-top:1px solid var(--bdr);">', unsafe_allow_html=True)
+        if st.session_state.get("ess_pendente"):
+            _dialog_confirmar_essencial()
     else:
         st.markdown('<div style="text-align:center;color:var(--t3);padding:2rem;">Nenhum resultado</div>', unsafe_allow_html=True)
 
@@ -192,60 +219,6 @@ def _inv():
     if st.session_state.get("hist_produto"): _hist_modal(st.session_state["hist_produto"])
 
     if st.session_state.get("foto_produto"): _foto_modal(st.session_state["foto_produto"])
-
-def _classificar_essenciais():
-    """Permite ao almoxarife/admin marcar manualmente quais insumos são essenciais.
-    Essa marcação prioriza o item nos gráficos de saúde de estoque do Dashboard
-    e na Previsão de Demanda."""
-    prods=listar_produtos(); cats=listar_categorias()
-    if not prods: st.info("Nenhum produto."); return
-
-    st.markdown('<div class="card"><div class="card-h">⭐ Classificação de Insumos Essenciais</div>',unsafe_allow_html=True)
-    st.markdown(
-        '<p style="font-size:.82rem;color:var(--t3);margin-top:-.3rem;">'
-        'Marque abaixo os insumos considerados <strong>essenciais</strong> para a operação. '
-        'Itens essenciais recebem prioridade visual no Dashboard e na Previsão de Demanda.</p>',
-        unsafe_allow_html=True,
-    )
-
-    c1,c2,c3=st.columns([3,2,2])
-    with c1: busca=st.text_input("🔍 Buscar",key="ess_busca")
-    with c2: cf=st.selectbox("Categoria",["Todas"]+[c["nome"] for c in cats],key="ess_cat")
-    with c3: sf=st.selectbox("Mostrar",["Todos","Somente Essenciais","Somente Não Essenciais"],key="ess_filtro")
-
-    fil=prods
-    if busca.strip():
-        b=busca.lower(); fil=[p for p in fil if b in p["nome"].lower() or b in p["codigo_interno"].lower()]
-    if cf!="Todas": fil=[p for p in fil if p.get("categorias") and p["categorias"]["nome"]==cf]
-    if sf=="Somente Essenciais": fil=[p for p in fil if p.get("essencial")]
-    elif sf=="Somente Não Essenciais": fil=[p for p in fil if not p.get("essencial")]
-
-    n_ess=sum(1 for p in prods if p.get("essencial"))
-    st.markdown(f'<div style="font-size:.78rem;color:var(--t3);margin:.3rem 0 .7rem;">{n_ess} de {len(prods)} produto(s) marcados como essenciais.</div>',unsafe_allow_html=True)
-
-    if not fil:
-        st.markdown('<div style="text-align:center;color:var(--t3);padding:2rem;">Nenhum resultado</div>', unsafe_allow_html=True)
-        st.markdown("</div>",unsafe_allow_html=True)
-        return
-
-    hc=st.columns([3,1.3,1.6,1.3])
-    for col,txt in zip(hc,["Produto","Código","Categoria","Essencial"]):
-        col.markdown(f'<div style="font-size:.72rem;font-weight:700;color:var(--t3);letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid var(--bdr);padding-bottom:.4rem;margin-bottom:.3rem;">{txt}</div>',unsafe_allow_html=True)
-
-    for p in fil:
-        cat=(p.get("categorias") or {}).get("nome","—")
-        rc=st.columns([3,1.3,1.6,1.3])
-        rc[0].markdown(f'<strong>{esc(p["nome"])}</strong>',unsafe_allow_html=True)
-        rc[1].markdown(f'<span class="mono">{esc(p["codigo_interno"])}</span>',unsafe_allow_html=True)
-        rc[2].markdown(f'<span style="color:var(--t3);">{esc(cat)}</span>',unsafe_allow_html=True)
-        with rc[3]:
-            atual=bool(p.get("essencial"))
-            novo=st.checkbox("Essencial",value=atual,key=f"ess_chk_{p['id']}",label_visibility="collapsed")
-            if novo!=atual:
-                atualizar_produto(p["id"],{"essencial":novo})
-                st.rerun()
-        st.markdown('<hr style="margin:.3rem 0;border:none;border-top:1px solid var(--bdr);">', unsafe_allow_html=True)
-    st.markdown("</div>",unsafe_allow_html=True)
 
 def _hist_modal(prod):
     st.markdown(f'<div class="card"><div class="card-h">📊 Histórico — {esc(prod["nome"])} ({esc(prod["codigo_interno"])})</div>',unsafe_allow_html=True)
