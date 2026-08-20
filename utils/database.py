@@ -151,6 +151,16 @@ def atualizar_produto(pid, dados):
         _log.error("atualizar_produto: %s", e)
         st.error("❌ Erro ao atualizar produto.")
 
+def listar_produtos_essenciais(apenas_ativos=True) -> list:
+    """Retorna apenas os produtos marcados manualmente como essenciais (prioridade de estoque/previsão)."""
+    try:
+        q = get_sb().table("produtos").select("*,categorias(nome)").eq("essencial", True).order("nome")
+        if apenas_ativos: q = q.eq("ativo", True)
+        return q.execute().data or []
+    except Exception as e:
+        _log.error("listar_produtos_essenciais: %s", e)
+        return []
+
 # ── ESTOQUE COM RESERVAS ─────────────────────────────────────────
 def estoque_disponivel(produto_id: str) -> float:
     try:
