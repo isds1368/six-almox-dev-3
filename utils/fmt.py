@@ -1,56 +1,69 @@
-"""utils/fmt.py — Formatação padrão brasileiro"""
-from datetime import datetime
+"""utils/fmt.py — Formatação padrão brasileiro — fuso horário de Brasília"""
+from datetime import datetime, timezone, timedelta
 
+# Fuso horário de Brasília (UTC-3)
+BRT = timezone(timedelta(hours=-3))
 
-def datahora_br(value) -> str:
-    if not value:
-        return "—"
-    if isinstance(value, str):
+def _to_brt(v):
+    """Converte qualquer valor de data/hora para datetime em horário de Brasília."""
+    if not v: return None
+    if isinstance(v, str):
+        v = v.strip()
+        # Remove microssegundos e normaliza
         try:
-            value = datetime.strptime(value[:19].replace("T", " "), "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            return value[:16].replace("T", " ")
-    return value.strftime("%d/%m/%Y %H:%M")
+            if "+" in v[10:] or v.endswith("Z"):
+                dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+                return dt.astimezone(BRT)
+            else:
+                dt = datetime.strptime(v[:19].replace("T", " "), "%Y-%m-%d %H:%M:%S")
+                return dt.replace(tzinfo=timezone.utc).astimezone(BRT)
+        except:
+            return None
+    if isinstance(v, datetime):
+        if v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc).astimezone(BRT)
+        return v.astimezone(BRT)
+    return None
 
+def datahora_br(v) -> str:
+    dt = _to_brt(v)
+    if not dt: return "—"
+    return dt.strftime("%d/%m/%Y %H:%M")
 
-def data_br(value) -> str:
-    if not value:
-        return "—"
-    if isinstance(value, str):
+def data_br(v) -> str:
+    if not v: return "—"
+    if isinstance(v, str):
         try:
-            value = datetime.strptime(value[:10], "%Y-%m-%d")
-        except ValueError:
-            return str(value)
-    return value.strftime("%d/%m/%Y")
+            dt = datetime.strptime(v[:10], "%Y-%m-%d")
+            return dt.strftime("%d/%m/%Y")
+        except: return str(v)[:10]
+    try: return v.strftime("%d/%m/%Y")
+    except: return str(v)
 
+def agora_brt() -> datetime:
+    """Retorna datetime atual no horário de Brasília."""
+    return datetime.now(BRT)
 
-def numero_br(value, dec: int = 0) -> str:
-    if value is None:
-        return "—"
+def agora_iso() -> str:
+    """ISO string do momento atual em Brasília (para salvar no banco)."""
+    return agora_brt().isoformat()
+
+def numero_br(v, dec=0) -> str:
+    if v is None: return "—"
     try:
-        s = f"{float(value):,.{dec}f}"
-        return s.replace(",", "X").replace(".", ",").replace("X", ".")
-    except Exception:
-        return str(value)
+        s = f"{float(v):,.{dec}f}"
+        return s.replace(",","X").replace(".",",").replace("X",".")
+    except: return str(v)
 
-
-def qtd_br(value) -> str:
-    if value is None:
-        return "—"
+def qtd_br(v) -> str:
+    if v is None: return "—"
     try:
-        v = float(value)
-        if v == int(v):
-            return numero_br(int(v), 0)
-        s = numero_br(v, 3)
-        # Remove zeros desnecessários
-        if "," in s:
-            s = s.rstrip("0").rstrip(",")
+        f = float(v)
+        if f == int(f): return numero_br(int(f), 0)
+        s = numero_br(f, 3)
+        if "," in s: s = s.rstrip("0").rstrip(",")
         return s
-    except Exception:
-        return str(value)
+    except: return str(v)
 
-
-def moeda_br(value) -> str:
-    if value is None:
-        return "—"
-    return f"R$ {numero_br(value, 2)}"
+def moeda_br(v) -> str:
+    return f"R$ {numero_br(v, 2)}" if v is not None else "—"

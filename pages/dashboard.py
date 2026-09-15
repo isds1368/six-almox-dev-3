@@ -31,6 +31,7 @@ def tela_dashboard():
     st.markdown(f"""
     <div class="kpis">
         {kpi_html("Produtos",       s["total_produtos"],       "ativos",            "var(--red)")}
+        {kpi_html("Inativos",       s["inativos"],             "desativados",       "var(--t3)")}
         {kpi_html("OK",             s["ok"],                   "acima do mínimo",   "var(--ok)")}
         {kpi_html("Baixo",          s["baixos"],               "abaixo do mínimo",  "var(--warn)")}
         {kpi_html("Crítico",        s["criticos"],             "sem estoque",       "var(--err)")}
@@ -71,6 +72,9 @@ def tela_dashboard():
     with c3: _recentes(s["recentes"])
     with c4: _atencao(s["produtos"])
 
+    # ── Produtos inativos ─────────────────────────────────────────
+    _inativos(s["produtos_inativos"])
+
     # ── Análise de consumo por período ───────────────────────────
     _secao_consumo_periodo()
 
@@ -84,6 +88,11 @@ def _consumo_geral(consumo):
         '<div class="card"><div class="card-h">📊 Consumo por Setor (total)</div>',
         unsafe_allow_html=True,
     )
+    # Remove "Sem Setor" da exibição do gráfico (apenas camada visual)
+    consumo = {
+        k: v for k, v in (consumo or {}).items()
+        if k.strip().lower() != "sem setor"
+    }
     if not consumo:
         st.markdown(
             '<p style="color:var(--t3);font-size:.82rem;text-align:center;padding:1rem">Sem dados.</p>',
@@ -132,7 +141,6 @@ def _pie(s):
 
 
 def _recentes(r):
-    from utils.fmt import sigla_para_opcao  # importação segura se existir
     st.markdown(
         '<div class="card"><div class="card-h">🔄 Movimentações Recentes</div>',
         unsafe_allow_html=True,
@@ -168,9 +176,11 @@ def _recentes(r):
     else:
         rows = ""
         for m in movs:
-            prod  = (m.get("produtos") or {}).get("nome","—")
-            cor   = "var(--ok)" if m["tipo"] == "entrada" else "var(--err)"
-            sinal = "+" if m["tipo"] == "entrada" else "-"
+            prod_info = m.get("produtos") or m.get("produto") or {}
+            prod   = prod_info.get("nome") or m.get("produto_nome") or "—"
+            setor  = m.get("setor_solicitante") or "—"
+            cor    = "var(--ok)" if m["tipo"] == "entrada" else "var(--err)"
+            sinal  = "+" if m["tipo"] == "entrada" else "-"
             tipo_lbl = "📥" if m["tipo"] == "entrada" else "📤"
             rows += (
                 f'<tr>'
@@ -178,13 +188,14 @@ def _recentes(r):
                 f'<td>{prod[:28]}{"…" if len(prod)>28 else ""}</td>'
                 f'<td style="color:{cor};font-weight:700;font-family:var(--mono);">'
                 f'{tipo_lbl} {sinal}{qtd_br(m["quantidade_informada"])} {m["unidade_informada"]}</td>'
+                f'<td style="font-size:.78rem;">{setor[:20]}{"…" if len(setor)>20 else ""}</td>'
                 f'</tr>'
             )
         # Altura fixa para 10 linhas (~38px cada) — rola se houver mais
         st.markdown(
             f'<div style="max-height:390px;overflow-y:auto;border-radius:5px;">'
             f'<table class="tbl"><thead><tr>'
-            f'<th>Data/Hora</th><th>Produto</th><th>Movimentação</th>'
+            f'<th>Data/Hora</th><th>Produto</th><th>Movimentação</th><th>Setor Solicitante</th>'
             f'</tr></thead><tbody>{rows}</tbody></table></div>'
             f'<div style="font-size:.72rem;color:var(--t3);margin-top:.4rem;">'
             f'{len(movs)} registro(s) no período</div>',
@@ -249,6 +260,42 @@ def _atencao(produtos):
             f'</tr></thead><tbody>{rows}</tbody></table></div>'
             f'<div style="font-size:.72rem;color:var(--t3);margin-top:.4rem;">'
             f'{len(at_sorted)} produto(s) em atenção</div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def _inativos(produtos_inativos):
+    st.markdown(
+        '<div class="card"><div class="card-h">🔕 Produtos Inativos</div>',
+        unsafe_allow_html=True,
+    )
+    if not produtos_inativos:
+        st.markdown(
+            '<p style="color:var(--ok);font-size:.87rem;padding:.3rem 0;">✅ Nenhum produto inativo no momento.</p>',
+            unsafe_allow_html=True,
+        )
+    else:
+        inat_sorted = sorted(produtos_inativos, key=lambda p: p["nome"])
+        rows = ""
+        for p in inat_sorted:
+            nome = p["nome"]
+            cod  = p.get("codigo_interno") or "—"
+            cat  = (p.get("categorias") or {}).get("nome", "—")
+            rows += (
+                f'<tr>'
+                f'<td>{nome[:28]}{"…" if len(nome)>28 else ""}</td>'
+                f'<td class="mono" style="color:var(--t3);">{cod}</td>'
+                f'<td style="color:var(--t3);">{cat}</td>'
+                f'</tr>'
+            )
+        st.markdown(
+            f'<div style="max-height:390px;overflow-y:auto;border-radius:5px;">'
+            f'<table class="tbl"><thead><tr>'
+            f'<th>Produto</th><th>Código</th><th>Categoria</th>'
+            f'</tr></thead><tbody>{rows}</tbody></table></div>'
+            f'<div style="font-size:.72rem;color:var(--t3);margin-top:.4rem;">'
+            f'{len(inat_sorted)} produto(s) inativo(s)</div>',
             unsafe_allow_html=True,
         )
     st.markdown("</div>", unsafe_allow_html=True)

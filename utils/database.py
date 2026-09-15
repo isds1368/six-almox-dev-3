@@ -313,9 +313,14 @@ def consumo_por_periodo(data_ini, data_fim, setor=None) -> list:
 # ── DASHBOARD ────────────────────────────────────────────────────
 def stats_dashboard() -> dict:
     _vazio = {"total_produtos":0,"criticos":0,"baixos":0,"ok":0,"pend_solicitacoes":0,
-              "pend_notas":0,"total_movimentacoes":0,"consumo_setor":{},"parados":0,"recentes":[],"produtos":[]}
+              "pend_notas":0,"total_movimentacoes":0,"consumo_setor":{},"parados":0,"recentes":[],
+              "produtos":[],"inativos":0,"produtos_inativos":[]}
     try:
         sb = get_sb(); prods = listar_produtos()
+        # Produtos inativos ficam de fora de listar_produtos() por padrão (apenas_ativos=True),
+        # então busca-se a lista completa só para apurar quantos/quais estão inativos.
+        todos = listar_produtos(apenas_ativos=False)
+        produtos_inativos = [p for p in todos if not p.get("ativo", True)]
         criticos=baixos=ok_c=0
         for p in prods:
             est=float(p.get("quantidade_total_secundaria") or 0)
@@ -339,7 +344,8 @@ def stats_dashboard() -> dict:
         recentes=sb.table("movimentacoes").select("criado_em,tipo,quantidade_informada,unidade_informada,status,produtos(nome)").order("criado_em",desc=True).limit(10).execute().data or []
         return {"total_produtos":len(prods),"criticos":criticos,"baixos":baixos,"ok":ok_c,
                 "pend_solicitacoes":pend_sol,"pend_notas":pend_nf,"total_movimentacoes":total_mov,
-                "consumo_setor":consumo,"parados":parados,"recentes":recentes,"produtos":prods}
+                "consumo_setor":consumo,"parados":parados,"recentes":recentes,"produtos":prods,
+                "inativos":len(produtos_inativos),"produtos_inativos":produtos_inativos}
     except Exception as e:
         _log.error("stats_dashboard: %s", e)
         return _vazio
@@ -451,8 +457,9 @@ def historico_saidas_previsao(dias: int = 120) -> list:
         lim = (datetime.utcnow() - timedelta(days=dias)).isoformat()
         return (get_sb().table("movimentacoes")
                 .select("criado_em,produto_id,quantidade_convertida,setor_solicitante,"
-                        "produto:produtos(id,nome,codigo_interno,unidade_secundaria,"
-                        "quantidade_total_secundaria,estoque_minimo_primario,fator_conversao)")
+                        "produto:produtos(id,nome,codigo_interno,unidade_primaria,unidade_secundaria,"
+                        "quantidade_total_secundaria,estoque_minimo_primario,fator_conversao,"
+                        "categoria_id,categorias(nome))")
                 .eq("tipo","saida").eq("status","concluido")
                 .not_.is_("tipo_saida","null")
                 .gte("criado_em", lim)
@@ -460,4 +467,23 @@ def historico_saidas_previsao(dias: int = 120) -> list:
                 .execute().data or [])
     except Exception as e:
         _log.error("historico_saidas_previsao: %s", e)
+        return []
+
+def historico_entradas_previsao(dias: int = 120) -> list:
+    """Retorna entradas concluídas dos últimos N dias (id do produto, data,
+    quantidade), pra alimentar a reconstrução de nível de serviço em
+    pages/previsao.py. Exclui ajustes manuais (tipo_entrada='Ajuste Manual' —
+    ver estoque.py), mesmo critério usado em historico_saidas_previsao."""
+    try:
+        from datetime import datetime, timedelta
+        lim = (datetime.utcnow() - timedelta(days=dias)).isoformat()
+        return (get_sb().table("movimentacoes")
+                .select("criado_em,produto_id,quantidade_convertida")
+                .eq("tipo","entrada").eq("status","concluido")
+                .or_("tipo_entrada.is.null,tipo_entrada.neq.Ajuste Manual")
+                .gte("criado_em", lim)
+                .order("criado_em", desc=False)
+                .execute().data or [])
+    except Exception as e:
+        _log.error("historico_entradas_previsao: %s", e)
         return []
