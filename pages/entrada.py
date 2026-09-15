@@ -56,6 +56,32 @@ def _u_restrita(label, up, us, key=None):
     return siglas[idx]
 
 
+def _parse_valor(txt):
+    """Converte texto de valor unitário (aceita vírgula ou ponto decimal) para float.
+    Campo vazio conta como 0.0. Retorna None se o texto não for um número válido."""
+    if not txt or not txt.strip():
+        return 0.0
+    t = txt.strip().replace("R$", "").replace(" ", "")
+    if "," in t and "." in t:
+        t = t.replace(".", "").replace(",", ".")
+    else:
+        t = t.replace(",", ".")
+    try:
+        v = float(t)
+        return v if v >= 0 else None
+    except ValueError:
+        return None
+
+
+def _valor_editavel(v):
+    """Formata um float como texto editável (vírgula decimal, sem prefixo R$)."""
+    try:
+        v = float(v or 0)
+    except (TypeError, ValueError):
+        v = 0.0
+    return f"{v:.2f}".replace(".", ",")
+
+
 def _calc_qc(qtd, ui, up, fat):
     """Quantidade convertida para a unidade secundária (a que fica no saldo).
     - Unidade primária escolhida → aplica o fator de conversão.
@@ -163,21 +189,34 @@ def _nova_entrada():
                 ean_n = st.text_input("EAN ou Código SFC (Opcional)",
                                        value=st.session_state.get("en",""),
                                        placeholder="Deixe em branco se não tiver")
+            c3, c4, c5 = st.columns(3)
+            with c3:
+                rc_n = st.selectbox("Reposição contínua?", ["Não","Sim"], key="rcn") == "Sim"
+            with c4:
+                ie_n = st.selectbox("Insumo estratégico?", ["Não","Sim"], key="ien") == "Sim"
+            with c5:
+                vu_n = st.text_input("Valor unitário (R$)", placeholder="Ex: 12,50", key="vun")
             desc_n = st.text_area("Descrição (opcional)", height=60)
             if st.form_submit_button("Cadastrar Produto →", type="primary", use_container_width=True):
                 if not nm.strip():
                     st.error("Nome obrigatório.")
                 else:
-                    d = {"nome": nm.strip(), "categoria_id": cm.get(cat),
-                         "unidade_primaria": up_n, "unidade_secundaria": us_n,
-                         "fator_conversao": fat_n, "estoque_minimo_primario": em_n,
-                         "descricao": desc_n.strip() or None}
-                    if ean_n.strip(): d["ean"] = ean_n.strip()
-                    novo = criar_produto(d)
-                    st.session_state["ps"] = novo
-                    st.session_state.pop("en", None)
-                    st.success(f"✅ Produto **{esc(novo['nome'])}** cadastrado — {esc(novo['codigo_interno'])}")
-                    st.rerun()
+                    valor_n = _parse_valor(vu_n)
+                    if valor_n is None:
+                        st.error("Valor unitário inválido.")
+                    else:
+                        d = {"nome": nm.strip(), "categoria_id": cm.get(cat),
+                             "unidade_primaria": up_n, "unidade_secundaria": us_n,
+                             "fator_conversao": fat_n, "estoque_minimo_primario": em_n,
+                             "descricao": desc_n.strip() or None,
+                             "reposicao_continua": rc_n, "insumo_estrategico": ie_n,
+                             "valor_unitario": valor_n}
+                        if ean_n.strip(): d["ean"] = ean_n.strip()
+                        novo = criar_produto(d)
+                        st.session_state["ps"] = novo
+                        st.session_state.pop("en", None)
+                        st.success(f"✅ Produto **{esc(novo['nome'])}** cadastrado — {esc(novo['codigo_interno'])}")
+                        st.rerun()
 
 
 def _form_entrada(prod, u, cm):
@@ -221,6 +260,17 @@ def _form_entrada(prod, u, cm):
                                   placeholder="Ex: Distribuidora ABC Ltda")
             obs  = st.text_area("Observação", height=50)
 
+        c3, c4, c5 = st.columns(3)
+        with c3:
+            rc = st.selectbox("Reposição contínua?", ["Não","Sim"],
+                               index=1 if prod.get("reposicao_continua") else 0, key="rc_ent") == "Sim"
+        with c4:
+            ie = st.selectbox("Insumo estratégico?", ["Não","Sim"],
+                               index=1 if prod.get("insumo_estrategico") else 0, key="ie_ent") == "Sim"
+        with c5:
+            vu = st.text_input("Valor unitário (R$)",
+                                value=_valor_editavel(prod.get("valor_unitario")), key="vu_ent")
+
         qc     = _calc_qc(qtd, ui, up, fat)
         ui_lbl = sigla_para_opcao(ui)
 
@@ -243,6 +293,9 @@ def _form_entrada(prod, u, cm):
                 if not nfn.strip():  erros.append("Número da NF obrigatório para Nota Fiscal.")
                 if not forn.strip(): erros.append("Fornecedor obrigatório para Nota Fiscal.")
                 if not cnr.strip():  erros.append("Número do Pedido/CNR obrigatório para Nota Fiscal.")
+            valor_parsed = _parse_valor(vu)
+            if valor_parsed is None:
+                erros.append("Valor unitário inválido.")
             if erros:
                 for e in erros: st.error(e)
             else:
@@ -271,6 +324,12 @@ def _form_entrada(prod, u, cm):
                 # A unidade informada agora está sempre restrita à primária ou
                 # secundária já cadastradas — não há mais motivo para sobrescrever
                 # o cadastro do produto a partir de uma entrada avulsa.
+
+                atualizar_produto(prod["id"], {
+                    "reposicao_continua": rc,
+                    "insumo_estrategico": ie,
+                    "valor_unitario":     valor_parsed,
+                })
 
                 st.session_state["entrada_ok"] = True
 
@@ -373,6 +432,17 @@ def _reabastecimento():
                                   placeholder="Ex: Distribuidora ABC Ltda")
             obs  = st.text_area("Observação", height=50)
 
+        c3, c4, c5 = st.columns(3)
+        with c3:
+            rc = st.selectbox("Reposição contínua?", ["Não","Sim"],
+                               index=1 if prod.get("reposicao_continua") else 0, key="rc_reab") == "Sim"
+        with c4:
+            ie = st.selectbox("Insumo estratégico?", ["Não","Sim"],
+                               index=1 if prod.get("insumo_estrategico") else 0, key="ie_reab") == "Sim"
+        with c5:
+            vu = st.text_input("Valor unitário (R$)",
+                                value=_valor_editavel(prod.get("valor_unitario")), key="vu_reab")
+
         qc     = _calc_qc(qtd, ui, up, fat)
         ui_lbl = sigla_para_opcao(ui)
 
@@ -396,6 +466,9 @@ def _reabastecimento():
                 if not nfn.strip():  erros.append("Número da NF obrigatório.")
                 if not forn.strip(): erros.append("Fornecedor obrigatório.")
                 if not cnr.strip():  erros.append("Número do Pedido/CNR obrigatório.")
+            valor_parsed = _parse_valor(vu)
+            if valor_parsed is None:
+                erros.append("Valor unitário inválido.")
             if erros:
                 for e in erros: st.error(e)
             else:
@@ -425,6 +498,12 @@ def _reabastecimento():
                 # A unidade informada agora está sempre restrita à primária ou
                 # secundária já cadastradas — não há mais motivo para sobrescrever
                 # o cadastro do produto a partir de um reabastecimento avulso.
+
+                atualizar_produto(prod["id"], {
+                    "reposicao_continua": rc,
+                    "insumo_estrategico": ie,
+                    "valor_unitario":     valor_parsed,
+                })
 
                 st.session_state["reab_ok"] = {
                     "nome":   prod["nome"],
