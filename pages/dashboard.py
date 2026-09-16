@@ -3,7 +3,7 @@ import io
 import datetime
 import plotly.graph_objects as go
 import streamlit as st
-from utils.database import stats_dashboard, consumo_por_periodo, listar_setores, listar_movimentacoes, historico_saidas_previsao
+from utils.database import stats_dashboard, consumo_por_periodo, listar_setores, listar_movimentacoes, historico_saidas_previsao, mesclar_classificacoes
 from utils.ui import badge, kpi_html, status_estoque
 from utils.fmt import qtd_br, datahora_br, data_br
 
@@ -63,6 +63,7 @@ def tela_dashboard():
         st.info(f"🔵 **{s['pend_notas']} nota(s)** pendentes de envio ao financeiro.")
 
     # ── Insumos Essenciais (prioridade) ─────────────────────────────
+    mesclar_classificacoes(s["produtos"])
     _saude_essenciais(s["produtos"])
     _reposicao_essenciais(s["produtos"])
 
