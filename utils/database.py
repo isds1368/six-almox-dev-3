@@ -151,6 +151,16 @@ def atualizar_produto(pid, dados):
         _log.error("atualizar_produto: %s", e)
         st.error("❌ Erro ao atualizar produto.")
 
+def listar_produtos_essenciais(apenas_ativos=True) -> list:
+    """Retorna apenas os produtos marcados manualmente como essenciais (prioridade de estoque/previsão)."""
+    try:
+        q = get_sb().table("produtos").select("*,categorias(nome)").eq("essencial", True).order("nome")
+        if apenas_ativos: q = q.eq("ativo", True)
+        return q.execute().data or []
+    except Exception as e:
+        _log.error("listar_produtos_essenciais: %s", e)
+        return []
+
 # ── ESTOQUE COM RESERVAS ─────────────────────────────────────────
 def estoque_disponivel(produto_id: str) -> float:
     try:
@@ -313,14 +323,9 @@ def consumo_por_periodo(data_ini, data_fim, setor=None) -> list:
 # ── DASHBOARD ────────────────────────────────────────────────────
 def stats_dashboard() -> dict:
     _vazio = {"total_produtos":0,"criticos":0,"baixos":0,"ok":0,"pend_solicitacoes":0,
-              "pend_notas":0,"total_movimentacoes":0,"consumo_setor":{},"parados":0,"recentes":[],
-              "produtos":[],"inativos":0,"produtos_inativos":[]}
+              "pend_notas":0,"total_movimentacoes":0,"consumo_setor":{},"parados":0,"recentes":[],"produtos":[]}
     try:
         sb = get_sb(); prods = listar_produtos()
-        # Produtos inativos ficam de fora de listar_produtos() por padrão (apenas_ativos=True),
-        # então busca-se a lista completa só para apurar quantos/quais estão inativos.
-        todos = listar_produtos(apenas_ativos=False)
-        produtos_inativos = [p for p in todos if not p.get("ativo", True)]
         criticos=baixos=ok_c=0
         for p in prods:
             est=float(p.get("quantidade_total_secundaria") or 0)
@@ -344,8 +349,7 @@ def stats_dashboard() -> dict:
         recentes=sb.table("movimentacoes").select("criado_em,tipo,quantidade_informada,unidade_informada,status,produtos(nome)").order("criado_em",desc=True).limit(10).execute().data or []
         return {"total_produtos":len(prods),"criticos":criticos,"baixos":baixos,"ok":ok_c,
                 "pend_solicitacoes":pend_sol,"pend_notas":pend_nf,"total_movimentacoes":total_mov,
-                "consumo_setor":consumo,"parados":parados,"recentes":recentes,"produtos":prods,
-                "inativos":len(produtos_inativos),"produtos_inativos":produtos_inativos}
+                "consumo_setor":consumo,"parados":parados,"recentes":recentes,"produtos":prods}
     except Exception as e:
         _log.error("stats_dashboard: %s", e)
         return _vazio
@@ -458,8 +462,7 @@ def historico_saidas_previsao(dias: int = 120) -> list:
         return (get_sb().table("movimentacoes")
                 .select("criado_em,produto_id,quantidade_convertida,setor_solicitante,"
                         "produto:produtos(id,nome,codigo_interno,unidade_primaria,unidade_secundaria,"
-                        "quantidade_total_secundaria,estoque_minimo_primario,fator_conversao,"
-                        "categoria_id,categorias(nome))")
+                        "quantidade_total_secundaria,estoque_minimo_primario,fator_conversao)")
                 .eq("tipo","saida").eq("status","concluido")
                 .not_.is_("tipo_saida","null")
                 .gte("criado_em", lim)
