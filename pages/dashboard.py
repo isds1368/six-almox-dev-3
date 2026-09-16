@@ -125,11 +125,10 @@ def _saude_essenciais(produtos):
         hovertemplate="<b>%{x}</b><br>Saúde: %{y:.0f}%<br>%{customdata}<extra></extra>",
     ))
     fig.update_layout(
-        **_PL, height=260,
+        **{**_PL, "showlegend": False}, height=260,
         xaxis=dict(gridcolor="rgba(0,0,0,.05)", tickfont=dict(size=10),
                    tickangle=-30 if len(nomes) > 6 else 0),
         yaxis=dict(gridcolor="rgba(0,0,0,.05)", range=[0, 115], ticksuffix="%"),
-        showlegend=False,
     )
     st.plotly_chart(fig, use_container_width=True)
     st.markdown(
