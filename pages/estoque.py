@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from utils.database import (listar_produtos, listar_categorias, atualizar_produto,
     registrar_movimentacao, listar_movimentacoes, historico_produto, listar_solicitacoes)
+from utils.database import listar_produtos_essenciais  # noqa: F401 (reexportado para uso em outras telas, ex. previsão)
 from utils.auth import sessao, is_admin, is_almoxarife
 from utils.ui import badge, status_estoque, kpi_html
 from utils.fmt import qtd_br, datahora_br
@@ -17,16 +18,6 @@ def _u(label,val="UN",key=None):
 
 _PL=dict(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
          font=dict(family="Plus Jakarta Sans",size=11),margin=dict(l=0,r=0,t=20,b=0))
-
-def _badge_ativo(ativo):
-    """Selo visual de situação do produto (ativo/inativo)."""
-    if ativo:
-        return ('<span style="display:inline-block;padding:.1rem .5rem;border-radius:20px;'
-                'font-size:.66rem;font-weight:700;background:rgba(22,163,74,.12);'
-                'color:var(--ok);white-space:nowrap;">Ativo</span>')
-    return ('<span style="display:inline-block;padding:.1rem .5rem;border-radius:20px;'
-            'font-size:.66rem;font-weight:700;background:rgba(220,38,38,.12);'
-            'color:var(--err);white-space:nowrap;">Inativo</span>')
 
 def _planilha_estoque(prods):
     """Gera um .xlsx (bytes) com todo o inventário, independente de filtros aplicados na tela."""
@@ -47,6 +38,7 @@ def _planilha_estoque(prods):
             "Unidade Primária":      sigla_para_opcao(p["unidade_primaria"]),
             "Estoque Mínimo (Prim.)":round(minp,2),
             "Status":                status,
+            "Essencial":             "⭐ Sim" if p.get("essencial") else "Não",
             "Ativo":                 "Sim" if p.get("ativo",True) else "Não",
         })
     df=pd.DataFrame(linhas)
@@ -75,12 +67,34 @@ def tela_estoque():
     else: tl[1]; _hist_aj()
     st.markdown("</div>",unsafe_allow_html=True)
 
+@st.dialog("Confirmar classificação de insumo")
+def _dialog_confirmar_essencial():
+    pend=st.session_state.get("ess_pendente")
+    if not pend:
+        st.rerun(); return
+    acao="marcar" if pend["novo"] else "desmarcar"
+    st.markdown(f'Deseja **{acao}** o insumo **{esc(pend["nome"])}** como essencial?')
+    if pend["novo"]:
+        st.caption("Insumos essenciais recebem prioridade na Saúde de Estoque e na Previsão de Reposição do Dashboard.")
+    else:
+        st.caption("O insumo deixará de aparecer nos painéis de prioridade do Dashboard.")
+    cc1,cc2=st.columns(2)
+    with cc1:
+        if st.button("✅ Confirmar",type="primary",use_container_width=True,key="ess_dialog_confirmar"):
+            atualizar_produto(pend["produto_id"],{"essencial":pend["novo"]})
+            st.session_state.pop("ess_pendente",None)
+            st.rerun()
+    with cc2:
+        if st.button("Cancelar",use_container_width=True,key="ess_dialog_cancelar"):
+            st.session_state.pop(f"ess_sel_{pend['produto_id']}",None)  # reseta a selectbox para o valor salvo
+            st.session_state.pop("ess_pendente",None)
+            st.rerun()
+
 def _inv():
-    prods=listar_produtos(apenas_ativos=False); cats=listar_categorias()
+    prods=listar_produtos(); cats=listar_categorias()
     if not prods: st.info("Nenhum produto."); return
-    ativos=[p for p in prods if p.get("ativo",True)]
-    inativos_n=len(prods)-len(ativos)
     ver_reserva=is_almoxarife()
+    pode_classificar=is_admin() or is_almoxarife()
     reservas={}
     if ver_reserva:
         for s in listar_solicitacoes():
@@ -91,11 +105,11 @@ def _inv():
     with c1: busca=st.text_input("🔍 Buscar",key="eb2")
     with c2: cf=st.selectbox("Categoria",["Todas"]+[c["nome"] for c in cats])
     with c3: sf=st.selectbox("Status",["Todos","OK","Baixo","Crítico"])
-    total=len(ativos)
-    criticos=sum(1 for p in ativos if float(p["quantidade_total_secundaria"])<=0)
-    baixos=sum(1 for p in ativos if 0<float(p["quantidade_total_secundaria"])<=float(p["estoque_minimo_primario"])*float(p["fator_conversao"]))
+    total=len(prods)
+    criticos=sum(1 for p in prods if float(p["quantidade_total_secundaria"])<=0)
+    baixos=sum(1 for p in prods if 0<float(p["quantidade_total_secundaria"])<=float(p["estoque_minimo_primario"])*float(p["fator_conversao"]))
     ok_c=total-criticos-baixos
-    st.markdown(f'<div class="kpis" style="grid-template-columns:repeat(5,1fr);margin:.7rem 0 1rem;">{kpi_html("Total",total,"","var(--t2)")}{kpi_html("OK",ok_c,"","var(--ok)")}{kpi_html("Baixo",baixos,"","var(--warn)")}{kpi_html("Crítico",criticos,"","var(--err)")}{kpi_html("Inativos",inativos_n,"","var(--t3)")}</div>',unsafe_allow_html=True)
+    st.markdown(f'<div class="kpis" style="grid-template-columns:repeat(4,1fr);margin:.7rem 0 1rem;">{kpi_html("Total",total,"","var(--t2)")}{kpi_html("OK",ok_c,"","var(--ok)")}{kpi_html("Baixo",baixos,"","var(--warn)")}{kpi_html("Crítico",criticos,"","var(--err)")}</div>',unsafe_allow_html=True)
 
     if ver_reserva:
         dados_xlsx=_planilha_estoque(prods)
@@ -139,17 +153,49 @@ def _inv():
     ini=(pagina-1)*por_pagina; fim=ini+por_pagina
     fil_pag=fil[ini:fim]
 
-    rows=""
-    for p in fil_pag:
-        est=float(p["quantidade_total_secundaria"]); minp=float(p["estoque_minimo_primario"]); fat=float(p["fator_conversao"])
-        estp=est/fat if fat else 0; txt,cls=status_estoque(est,minp,fat)
-        cat=(p.get("categorias") or {}).get("nome","—"); up_lbl=sigla_para_opcao(p["unidade_primaria"]); us_lbl=sigla_para_opcao(p["unidade_secundaria"])
-        res_qtd=reservas.get(p["id"],0.0) if ver_reserva else 0.0
-        res_html=f'<br><span style="font-size:.7rem;color:var(--warn);font-weight:600;">🔒 Reservado: {qtd_br(res_qtd)} {us_lbl}</span>' if res_qtd>0 else ''
-        sit_html=_badge_ativo(p.get("ativo",True))
-        rows+=f'<tr><td><strong>{p["nome"]}</strong> {sit_html}</td><td class="mono">{p["codigo_interno"]}</td><td class="mono" style="color:var(--t4);">{p.get("ean") or "—"}</td><td style="color:var(--t3);">{cat}</td><td><strong>{qtd_br(est)} {us_lbl}</strong><br><span style="font-size:.71rem;color:var(--t3);">= {qtd_br(estp)} {up_lbl}</span>{res_html}</td><td style="color:var(--t3);">{qtd_br(minp)} {up_lbl}</td><td>{badge(txt,cls)}</td></tr>'
-    vz='<tr><td colspan="7" style="text-align:center;color:var(--t3);padding:2rem;">Nenhum resultado</td></tr>'
-    st.markdown(f'<table class="tbl"><thead><tr><th>Produto</th><th>Código</th><th>EAN</th><th>Categoria</th><th>Estoque</th><th>Mínimo</th><th>Status</th></tr></thead><tbody>{rows or vz}</tbody></table>',unsafe_allow_html=True)
+    if fil_pag:
+        head_ratio = [2.0, 0.9, 1.0, 1.2, 1.6, 1.0, 0.9, 1.1, 0.8]
+        heads = ["Produto","Código","EAN","Categoria","Estoque","Mínimo","Status","Essencial","Foto"]
+        hc = st.columns(head_ratio)
+        for col, txt in zip(hc, heads):
+            col.markdown(
+                f'<div style="font-size:.72rem;font-weight:700;color:var(--t3);'
+                f'letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid var(--bdr);'
+                f'padding-bottom:.4rem;margin-bottom:.3rem;">{txt}</div>', unsafe_allow_html=True)
+        for p in fil_pag:
+            est=float(p["quantidade_total_secundaria"]); minp=float(p["estoque_minimo_primario"]); fat=float(p["fator_conversao"])
+            estp=est/fat if fat else 0; txt,cls=status_estoque(est,minp,fat)
+            cat=(p.get("categorias") or {}).get("nome","—"); up_lbl=sigla_para_opcao(p["unidade_primaria"]); us_lbl=sigla_para_opcao(p["unidade_secundaria"])
+            res_qtd=reservas.get(p["id"],0.0) if ver_reserva else 0.0
+            res_html=f'<br><span style="font-size:.7rem;color:var(--warn);font-weight:600;">🔒 Reservado: {qtd_br(res_qtd)} {us_lbl}</span>' if res_qtd>0 else ''
+            rc = st.columns(head_ratio)
+            rc[0].markdown(f'<strong>{esc(p["nome"])}</strong>', unsafe_allow_html=True)
+            rc[1].markdown(f'<span class="mono">{esc(p["codigo_interno"])}</span>', unsafe_allow_html=True)
+            rc[2].markdown(f'<span class="mono" style="color:var(--t4);">{esc(p.get("ean") or "—")}</span>', unsafe_allow_html=True)
+            rc[3].markdown(f'<span style="color:var(--t3);">{esc(cat)}</span>', unsafe_allow_html=True)
+            rc[4].markdown(f'<strong>{qtd_br(est)} {us_lbl}</strong><br><span style="font-size:.71rem;color:var(--t3);">= {qtd_br(estp)} {up_lbl}</span>{res_html}', unsafe_allow_html=True)
+            rc[5].markdown(f'<span style="color:var(--t3);">{qtd_br(minp)} {up_lbl}</span>', unsafe_allow_html=True)
+            rc[6].markdown(badge(txt,cls), unsafe_allow_html=True)
+            with rc[7]:
+                if pode_classificar:
+                    atual_ess=bool(p.get("essencial"))
+                    sel=st.selectbox("Essencial",["Não","Sim"],index=1 if atual_ess else 0,
+                                      key=f"ess_sel_{p['id']}",label_visibility="collapsed")
+                    novo_ess=(sel=="Sim")
+                    if novo_ess!=atual_ess:
+                        st.session_state["ess_pendente"]={"produto_id":p["id"],"nome":p["nome"],"novo":novo_ess}
+                else:
+                    st.markdown('⭐' if p.get("essencial") else '—', unsafe_allow_html=True)
+            with rc[8]:
+                if st.button("📷", key=f"foto_btn_{p['id']}", use_container_width=True, help="Ver/gerenciar foto"):
+                    st.session_state["foto_produto"]=p
+                    st.session_state.pop("foto_modo",None)
+                    st.rerun()
+            st.markdown('<hr style="margin:.35rem 0;border:none;border-top:1px solid var(--bdr);">', unsafe_allow_html=True)
+        if st.session_state.get("ess_pendente"):
+            _dialog_confirmar_essencial()
+    else:
+        st.markdown('<div style="text-align:center;color:var(--t3);padding:2rem;">Nenhum resultado</div>', unsafe_allow_html=True)
 
     if fil and total_paginas>1:
         cn1,cn2,cn3=st.columns([1,2,1])
@@ -172,6 +218,8 @@ def _inv():
             if st.button("📊 Ver Histórico",use_container_width=True,key="btn_hist"): st.session_state["hist_produto"]=pm[sel]; st.rerun()
     if st.session_state.get("hist_produto"): _hist_modal(st.session_state["hist_produto"])
 
+    if st.session_state.get("foto_produto"): _foto_modal(st.session_state["foto_produto"])
+
 def _hist_modal(prod):
     st.markdown(f'<div class="card"><div class="card-h">📊 Histórico — {esc(prod["nome"])} ({esc(prod["codigo_interno"])})</div>',unsafe_allow_html=True)
     hoje=datetime.date.today(); ini=hoje.replace(month=1,day=1)
@@ -185,11 +233,8 @@ def _hist_modal(prod):
     movs=historico_produto(prod["id"],d_ini.strftime("%Y-%m-%d"),d_fim.strftime("%Y-%m-%d"))
     if not movs: st.info("Nenhuma movimentação no período."); st.markdown("</div>",unsafe_allow_html=True); return
     us_lbl=sigla_para_opcao(prod.get("unidade_secundaria","UN"))
-    # Ajustes manuais nunca entram no gráfico de consumo/movimentação: mesma regra
-    # já aplicada no dashboard e na previsão de demanda (não são entrada nem saída real).
-    movs_graf=[m for m in movs if not ("[AJUSTE]" in (m.get("observacao") or "") or m.get("tipo_entrada")=="Ajuste Manual")]
     datas=[]; entradas=[]; saidas=[]; saldo=[]; acum=0.0
-    for m in movs_graf:
+    for m in movs:
         data=m.get("criado_em","")[:10]; qtd=float(m.get("quantidade_convertida",0)); tipo=m.get("tipo","")
         if tipo=="entrada": acum+=qtd; entradas.append(qtd); saidas.append(0)
         else: acum=max(0,acum-qtd); saidas.append(qtd); entradas.append(0)
@@ -212,6 +257,70 @@ def _hist_modal(prod):
         resp=exe if exe else sol; subtipo=m.get("tipo_entrada") or m.get("tipo_saida") or "—"
         rows+=f'<tr><td style="color:var(--t3);font-size:.73rem;">{datahora_br(m["criado_em"])}</td><td><strong style="color:{cor};">{tipo_lbl}</strong></td><td style="color:var(--t3);font-size:.75rem;">{subtipo}</td><td style="color:{cor};font-weight:700;font-family:var(--mono);">{sinal}{qtd_br(m["quantidade_convertida"])} {un_lbl}</td><td>{m.get("setor_solicitante") or "—"}</td><td style="color:var(--t3);">{m.get("numero_nf") or "—"}</td><td style="color:var(--t3);">{resp}</td></tr>'
     st.markdown(f'<table class="tbl"><thead><tr><th>Data/Hora</th><th>Tipo</th><th>Subtipo</th><th>Quantidade</th><th>Setor</th><th>NF</th><th>Responsável</th></tr></thead><tbody>{rows}</tbody></table>',unsafe_allow_html=True)
+    st.markdown("</div>",unsafe_allow_html=True)
+
+def _foto_modal(prod):
+    st.markdown(f'<div class="card"><div class="card-h">🖼️ Foto — {esc(prod["nome"])} ({esc(prod["codigo_interno"])})</div>',unsafe_allow_html=True)
+    tem_foto = bool(prod.get("foto_url"))
+    modo = st.session_state.get("foto_modo")
+
+    if not tem_foto:
+        st.info("Nenhuma foto cadastrada para este produto.")
+        if modo == "adicionar":
+            nova = st.text_input("URL da Foto", key="foto_nova_url", placeholder="Cole o link da imagem")
+            if nova.strip():
+                st.image(nova.strip(), width=200)
+            cs, cc = st.columns(2)
+            with cs:
+                if st.button("💾 Salvar Foto", type="primary", use_container_width=True, key="foto_salvar_btn"):
+                    if nova.strip():
+                        atualizar_produto(prod["id"], {"foto_url": nova.strip()})
+                        st.session_state.pop("foto_modo", None)
+                        st.session_state.pop("foto_nova_url", None)
+                        st.session_state.pop("foto_produto", None)
+                        st.success("Foto adicionada com sucesso.")
+                        st.rerun()
+                    else:
+                        st.error("Informe uma URL válida.")
+            with cc:
+                if st.button("Cancelar", use_container_width=True, key="foto_add_cancelar"):
+                    st.session_state.pop("foto_modo", None); st.rerun()
+        else:
+            if st.button("➕ Adicionar Foto", type="primary", key="foto_add_btn"):
+                st.session_state["foto_modo"] = "adicionar"; st.rerun()
+
+    else:
+        if modo == "ver":
+            st.image(prod["foto_url"], caption=prod["nome"], use_container_width=True)
+            if st.button("← Voltar", key="foto_ver_voltar"):
+                st.session_state.pop("foto_modo", None); st.rerun()
+        elif modo == "confirmar_apagar":
+            st.warning("Tem certeza que deseja apagar a foto deste produto? Essa ação não pode ser desfeita.")
+            ca, cb = st.columns(2)
+            with ca:
+                if st.button("🗑️ Sim, apagar", type="primary", use_container_width=True, key="foto_apagar_sim"):
+                    atualizar_produto(prod["id"], {"foto_url": None})
+                    st.session_state.pop("foto_modo", None)
+                    st.session_state.pop("foto_produto", None)
+                    st.success("Foto removida.")
+                    st.rerun()
+            with cb:
+                if st.button("Cancelar", use_container_width=True, key="foto_apagar_nao"):
+                    st.session_state.pop("foto_modo", None); st.rerun()
+        else:
+            cv, cd = st.columns(2)
+            with cv:
+                if st.button("👁️ Ver Foto", use_container_width=True, key="foto_ver_btn"):
+                    st.session_state["foto_modo"] = "ver"; st.rerun()
+            with cd:
+                if st.button("🗑️ Apagar Foto", use_container_width=True, key="foto_apagar_btn"):
+                    st.session_state["foto_modo"] = "confirmar_apagar"; st.rerun()
+
+    st.markdown('<div style="margin-top:.6rem;"></div>', unsafe_allow_html=True)
+    if st.button("✖ Fechar", key="fechar_foto"):
+        st.session_state.pop("foto_produto", None)
+        st.session_state.pop("foto_modo", None)
+        st.rerun()
     st.markdown("</div>",unsafe_allow_html=True)
 
 def _ajuste():
@@ -294,9 +403,13 @@ def _editar():
             fe=st.number_input("Fator",value=float(p["fator_conversao"]),min_value=0.001)
             eme=st.number_input("Est. mín (prim)",value=float(p["estoque_minimo_primario"]),min_value=0.0)
             eane=st.text_input("CODIGO DO PRODUTO",value=p.get("ean") or ""); ate=st.checkbox("Ativo",value=p.get("ativo",True))
+            esse=st.checkbox("⭐ Insumo Essencial",value=bool(p.get("essencial")))
         de=st.text_area("Descrição",value=p.get("descricao") or "")
+        fote=st.text_input("URL da Foto (opcional)",value=p.get("foto_url") or "",help="Cole o link de uma imagem do produto (ex.: link do Supabase Storage).")
+        if fote.strip():
+            st.image(fote.strip(),width=160)
         if st.form_submit_button("Salvar →",type="primary"):
-            atualizar_produto(p["id"],{"nome":ne.strip(),"categoria_id":cm.get(ce),"unidade_primaria":upe,"unidade_secundaria":use,"fator_conversao":fe,"estoque_minimo_primario":eme,"ean":eane.strip() or None,"descricao":de.strip() or None,"ativo":ate})
+            atualizar_produto(p["id"],{"nome":ne.strip(),"categoria_id":cm.get(ce),"unidade_primaria":upe,"unidade_secundaria":use,"fator_conversao":fe,"estoque_minimo_primario":eme,"ean":eane.strip() or None,"descricao":de.strip() or None,"ativo":ate,"foto_url":fote.strip() or None,"essencial":esse})
             st.success("✅ Produto atualizado!"); st.rerun()
     st.markdown("</div>",unsafe_allow_html=True)
 
