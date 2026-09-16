@@ -431,8 +431,39 @@ def _hist():
         return
     st.markdown('<div class="card"><div class="card-h">Histórico de Entradas</div>',
                 unsafe_allow_html=True)
+
+    busca = st.text_input("🔍 Buscar por produto, código ou fornecedor", key="hent_busca")
+    if busca.strip():
+        b = busca.lower()
+        movs = [m for m in movs if b in (m.get("produto") or {}).get("nome","").lower()
+                or b in (m.get("produto") or {}).get("codigo_interno","").lower()
+                or b in (m.get("fornecedor") or "").lower()]
+
+    # --- Paginação (mesmo padrão do Inventário) ---
+    OPCOES_PP = [10,20,40]
+    filtro_sig = f"{busca}"
+    if st.session_state.get("hent_filtro_sig") != filtro_sig:
+        st.session_state["hent_filtro_sig"] = filtro_sig
+        st.session_state["hent_pagina"] = 1
+    cpp1,cpp2 = st.columns([1,5])
+    with cpp1: por_pagina = st.selectbox("Itens por página", OPCOES_PP, key="hent_por_pagina")
+    if st.session_state.get("hent_por_pagina_ant") != por_pagina:
+        st.session_state["hent_por_pagina_ant"] = por_pagina
+        st.session_state["hent_pagina"] = 1
+    total_paginas = max(1,-(-len(movs)//por_pagina)) if movs else 1
+    pagina = st.session_state.get("hent_pagina",1)
+    pagina = min(max(pagina,1),total_paginas)
+    st.session_state["hent_pagina"] = pagina
+    ini=(pagina-1)*por_pagina; fim=ini+por_pagina
+    movs_pag = movs[ini:fim]
+
+    if not movs_pag:
+        st.markdown('<div style="text-align:center;color:var(--t3);font-size:.8rem;padding:2rem;">Nenhum resultado</div>', unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
     rows = ""
-    for m in movs:
+    for m in movs_pag:
         prod   = (m.get("produto") or {}).get("nome","—")
         cod    = (m.get("produto") or {}).get("codigo_interno","—")
         eu     = (m.get("exe") or {}).get("nick","—")
@@ -456,4 +487,16 @@ def _hist():
         f'<th>Qtd</th><th>Tipo</th><th>NF</th><th>Obs/CNR</th><th>Executor</th>'
         f'</tr></thead><tbody>{rows}</tbody></table>',
         unsafe_allow_html=True)
+
+    if total_paginas>1:
+        cn1,cn2,cn3=st.columns([1,2,1])
+        with cn1:
+            if st.button("← Anterior",disabled=(pagina<=1),key="hent_prev",use_container_width=True):
+                st.session_state["hent_pagina"]=pagina-1; st.rerun()
+        with cn2:
+            st.markdown(f'<div style="text-align:center;color:var(--t3);padding-top:.45rem;font-size:.72rem;">Página {pagina} de {total_paginas}</div>',unsafe_allow_html=True)
+        with cn3:
+            if st.button("Próxima →",disabled=(pagina>=total_paginas),key="hent_next",use_container_width=True):
+                st.session_state["hent_pagina"]=pagina+1; st.rerun()
+
     st.markdown("</div>", unsafe_allow_html=True)
