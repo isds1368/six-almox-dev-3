@@ -6,7 +6,7 @@ from utils.database import (listar_produtos, listar_categorias, atualizar_produt
     registrar_movimentacao, listar_movimentacoes, historico_produto, listar_solicitacoes)
 from utils.database import mesclar_classificacoes, definir_classificacao_produto  # classificação manual (produto_flags)
 from utils.auth import sessao, is_admin, is_almoxarife
-from utils.ui import badge, status_estoque
+from utils.ui import badge, status_estoque, kpi_html
 from utils.fmt import qtd_br, datahora_br
 from utils.unidades import SIGLAS, OPCOES, sigla_para_opcao, opcao_para_sigla
 from utils.sanitize import esc, esc_trunc
@@ -59,7 +59,7 @@ def _planilha_estoque(prods):
             "Estoque Mínimo (Prim.)":round(minp,2),
             "Valor Última Compra (R$)": round(float(p.get("valor_unitario") or 0),2),
             "Status":                status,
-            "Estratégico":           "⭐ Sim" if p.get("essencial") else "Não",
+            "Essencial":             "⭐ Sim" if p.get("essencial") else "Não",
             "Reposição Contínua":    "Sim" if p.get("reposicao_continua") else "Não",
             "Ativo":                 "Sim" if p.get("ativo",True) else "Não",
         })
@@ -91,8 +91,8 @@ def tela_estoque():
 
 _ROTULOS_CLASSIFICACAO = {
     "essencial": {
-        "titulo": "estratégico",
-        "dica_on": "Insumos estratégicos recebem prioridade na Saúde de Estoque e na Previsão de Reposição do Dashboard.",
+        "titulo": "essencial",
+        "dica_on": "Insumos essenciais recebem prioridade na Saúde de Estoque e na Previsão de Reposição do Dashboard.",
         "dica_off": "O insumo deixará de aparecer nos painéis de prioridade do Dashboard.",
     },
     "reposicao_continua": {
@@ -138,31 +138,12 @@ def _inv():
     c1,c2,c3=st.columns([3,2,2])
     with c1: busca=st.text_input("🔍 Buscar",key="eb2")
     with c2: cf=st.selectbox("Categoria",["Todas"]+[c["nome"] for c in cats])
-    with c3: sf=st.selectbox("Status",["Todos","OK","Estoque Baixo","Estoque Zerado"],key="inv_status_filtro")
+    with c3: sf=st.selectbox("Status",["Todos","OK","Estoque Baixo","Estoque Zerado"])
     total=len(prods)
     criticos=sum(1 for p in prods if float(p["quantidade_total_secundaria"])<=0)
     baixos=sum(1 for p in prods if 0<float(p["quantidade_total_secundaria"])<=float(p["estoque_minimo_primario"])*float(p["fator_conversao"]))
     ok_c=total-criticos-baixos
-    estrategicos_c=sum(1 for p in prods if p.get("essencial"))
-    so_estr_atual=st.session_state.get("inv_somente_estrategicos",False)
-
-    # Cards de KPI clicáveis: clicar em um deles filtra o inventário abaixo.
-    _CARDS_KPI=[
-        ("📦","Total",total,"Todos",False),
-        ("🟢","OK",ok_c,"OK",False),
-        ("🟠","Estoque Baixo",baixos,"Estoque Baixo",False),
-        ("🔴","Estoque Zerado",criticos,"Estoque Zerado",False),
-        ("⭐","Estratégicos",estrategicos_c,"Todos",True),
-    ]
-    cB=st.columns(5)
-    for col,(icone,rotulo,valor,status_alvo,so_estr) in zip(cB,_CARDS_KPI):
-        with col:
-            ativo=(so_estr_atual==so_estr) and (so_estr or sf==status_alvo)
-            if st.button(f"{icone} {rotulo} — {valor}",use_container_width=True,
-                         type="primary" if ativo else "secondary",key=f"kpi_card_{rotulo}"):
-                st.session_state["inv_status_filtro"]=status_alvo
-                st.session_state["inv_somente_estrategicos"]=so_estr
-                st.rerun()
+    st.markdown(f'<div class="kpis" style="grid-template-columns:repeat(4,1fr);margin:.7rem 0 1rem;">{kpi_html("Total",total,"","var(--t2)")}{kpi_html("OK",ok_c,"","var(--ok)")}{kpi_html("Estoque Baixo",baixos,"","var(--warn)")}{kpi_html("Estoque Zerado",criticos,"","var(--err)")}</div>',unsafe_allow_html=True)
 
     if ver_reserva:
         dados_xlsx=_planilha_estoque(prods)
@@ -182,13 +163,11 @@ def _inv():
     if sf!="Todos":
         def _s(p): t,_=status_estoque(float(p["quantidade_total_secundaria"]),float(p["estoque_minimo_primario"]),float(p["fator_conversao"])); return _rotulo_status(t)
         fil=[p for p in fil if _s(p)==sf]
-    if so_estr_atual:
-        fil=[p for p in fil if p.get("essencial")]
     st.markdown(f'<div class="card"><div class="card-h">Produtos ({len(fil)})</div>',unsafe_allow_html=True)
 
     # --- Paginação ---
     OPCOES_PP=[10,20,40]
-    filtro_sig=f"{busca}|{cf}|{sf}|{so_estr_atual}"
+    filtro_sig=f"{busca}|{cf}|{sf}"
     if st.session_state.get("inv_filtro_sig")!=filtro_sig:
         st.session_state["inv_filtro_sig"]=filtro_sig
         st.session_state["inv_pagina"]=1
@@ -210,7 +189,7 @@ def _inv():
 
     if fil_pag:
         head_ratio = [1.65, 0.72, 0.8, 1.0, 1.35, 0.8, 1.0, 0.8, 0.95, 1.05, 0.6]
-        heads = ["Produto","Código","EAN","Categoria","Estoque","Mínimo","Valor Última Compra","Status","Estratégico","Repos. Contínua","Foto"]
+        heads = ["Produto","Código","EAN","Categoria","Estoque","Mínimo","Valor Última Compra","Status","Essencial","Repos. Contínua","Foto"]
         hc = st.columns(head_ratio)
         for col, txt in zip(hc, heads):
             col.markdown(
@@ -469,7 +448,7 @@ def _editar():
         fote=st.text_input("URL da Foto (opcional)",value=p.get("foto_url") or "",help="Cole o link de uma imagem do produto (ex.: link do Supabase Storage).")
         if fote.strip():
             st.image(fote.strip(),width=160)
-        st.caption("💡 Classificação de Estratégico / Reposição Contínua agora é feita direto na aba Inventário.")
+        st.caption("💡 Classificação de Essencial / Reposição Contínua agora é feita direto na aba Inventário.")
         if st.form_submit_button("Salvar →",type="primary"):
             atualizar_produto(p["id"],{"nome":ne.strip(),"categoria_id":cm.get(ce),"unidade_primaria":upe,"unidade_secundaria":use,"fator_conversao":fe,"estoque_minimo_primario":eme,"ean":eane.strip() or None,"descricao":de.strip() or None,"ativo":ate,"foto_url":fote.strip() or None,"valor_unitario":ve if ve>0 else None})
             st.success("✅ Produto atualizado!"); st.rerun()
@@ -480,52 +459,11 @@ def _hist_aj():
     aj=[m for m in movs if "[AJUSTE]" in (m.get("observacao") or "") or m.get("tipo_entrada")=="Ajuste Manual"]
     if not aj: st.info("Nenhum ajuste registrado."); return
     st.markdown('<div class="card"><div class="card-h">Histórico de Ajustes</div>',unsafe_allow_html=True)
-
-    busca=st.text_input("🔍 Buscar por produto ou responsável",key="haj_busca")
-    if busca.strip():
-        b=busca.lower()
-        aj=[a for a in aj if b in (a.get("produto") or {}).get("nome","").lower()
-            or b in ((a.get("exe") or {}).get("nick","")).lower()]
-
-    # --- Paginação (mesmo padrão do Inventário) ---
-    OPCOES_PP=[10,20,40]
-    filtro_sig=f"{busca}"
-    if st.session_state.get("haj_filtro_sig")!=filtro_sig:
-        st.session_state["haj_filtro_sig"]=filtro_sig
-        st.session_state["haj_pagina"]=1
-    cpp1,cpp2=st.columns([1,5])
-    with cpp1: por_pagina=st.selectbox("Itens por página",OPCOES_PP,key="haj_por_pagina")
-    if st.session_state.get("haj_por_pagina_ant")!=por_pagina:
-        st.session_state["haj_por_pagina_ant"]=por_pagina
-        st.session_state["haj_pagina"]=1
-    total_paginas=max(1,-(-len(aj)//por_pagina)) if aj else 1
-    pagina=st.session_state.get("haj_pagina",1)
-    pagina=min(max(pagina,1),total_paginas)
-    st.session_state["haj_pagina"]=pagina
-    ini=(pagina-1)*por_pagina; fim=ini+por_pagina
-    aj_pag=aj[ini:fim]
-
-    if not aj_pag:
-        st.markdown(f'<div style="text-align:center;color:var(--t3);font-size:{FS_SUB};padding:2rem;">Nenhum resultado</div>',unsafe_allow_html=True)
-        st.markdown("</div>",unsafe_allow_html=True)
-        return
-
     rows=""
-    for a in aj_pag:
+    for a in aj:
         prod=a.get("produto") or {}; eu=(a.get("exe") or {}).get("nick","—")
         ds=f"+{qtd_br(a['quantidade_convertida'])}" if a["tipo"]=="entrada" else f"-{qtd_br(a['quantidade_convertida'])}"
         cor="var(--ok)" if a["tipo"]=="entrada" else "var(--err)"; obs=(a.get("observacao") or "").replace("[AJUSTE] ",""); un_lbl=sigla_para_opcao(a.get("unidade_informada","UN"))
         rows+=f'<tr><td style="color:var(--t3);font-size:{FS_SUB};">{datahora_br(a["criado_em"])}</td><td style="font-size:{FS_BODY};"><strong>{prod.get("nome","—")}</strong></td><td style="color:{cor};font-weight:700;font-family:var(--mono);font-size:{FS_BODY};">{ds} {un_lbl}</td><td style="color:var(--t3);font-size:{FS_SUB};">{obs[:50]}{"…" if len(obs)>50 else ""}</td><td style="color:var(--t3);font-size:{FS_SUB};">{eu}</td></tr>'
     st.markdown(f'<table class="tbl"><thead><tr><th>Data</th><th>Produto</th><th>Variação</th><th>Motivo</th><th>Responsável</th></tr></thead><tbody>{rows}</tbody></table>',unsafe_allow_html=True)
-
-    if total_paginas>1:
-        cn1,cn2,cn3=st.columns([1,2,1])
-        with cn1:
-            if st.button("← Anterior",disabled=(pagina<=1),key="haj_prev",use_container_width=True):
-                st.session_state["haj_pagina"]=pagina-1; st.rerun()
-        with cn2:
-            st.markdown(f'<div style="text-align:center;color:var(--t3);padding-top:.45rem;font-size:{FS_SUB};">Página {pagina} de {total_paginas}</div>',unsafe_allow_html=True)
-        with cn3:
-            if st.button("Próxima →",disabled=(pagina>=total_paginas),key="haj_next",use_container_width=True):
-                st.session_state["haj_pagina"]=pagina+1; st.rerun()
     st.markdown("</div>",unsafe_allow_html=True)
