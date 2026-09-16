@@ -16,6 +16,13 @@ def _u(label,val="UN",key=None):
     kw={"key":key} if key else {}
     return opcao_para_sigla(st.selectbox(label,OPCOES,index=idx,**kw))
 
+# Rótulos de status do sistema: apenas 3 existem — "OK", "Estoque Baixo" e "Estoque Zerado".
+# status_estoque() (utils/ui) ainda retorna os nomes antigos ("Baixo"/"Crítico") por baixo dos panos;
+# aqui traduzimos para exibição, sem tocar na classe css (cls) que ele também retorna.
+_ROTULOS_STATUS = {"Baixo": "Estoque Baixo", "Crítico": "Estoque Zerado"}
+def _rotulo_status(txt):
+    return _ROTULOS_STATUS.get(txt, txt)
+
 _PL=dict(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
          font=dict(family="Plus Jakarta Sans",size=11),margin=dict(l=0,r=0,t=20,b=0))
 
@@ -25,7 +32,7 @@ def _planilha_estoque(prods):
     for p in prods:
         est=float(p["quantidade_total_secundaria"]); minp=float(p["estoque_minimo_primario"]); fat=float(p["fator_conversao"])
         estp=est/fat if fat else 0
-        status,_=status_estoque(est,minp,fat)
+        status,_=status_estoque(est,minp,fat); status=_rotulo_status(status)
         cat=(p.get("categorias") or {}).get("nome","—")
         linhas.append({
             "Código":                p["codigo_interno"],
@@ -117,12 +124,12 @@ def _inv():
     c1,c2,c3=st.columns([3,2,2])
     with c1: busca=st.text_input("🔍 Buscar",key="eb2")
     with c2: cf=st.selectbox("Categoria",["Todas"]+[c["nome"] for c in cats])
-    with c3: sf=st.selectbox("Status",["Todos","OK","Baixo","Crítico"])
+    with c3: sf=st.selectbox("Status",["Todos","OK","Estoque Baixo","Estoque Zerado"])
     total=len(prods)
     criticos=sum(1 for p in prods if float(p["quantidade_total_secundaria"])<=0)
     baixos=sum(1 for p in prods if 0<float(p["quantidade_total_secundaria"])<=float(p["estoque_minimo_primario"])*float(p["fator_conversao"]))
     ok_c=total-criticos-baixos
-    st.markdown(f'<div class="kpis" style="grid-template-columns:repeat(4,1fr);margin:.7rem 0 1rem;">{kpi_html("Total",total,"","var(--t2)")}{kpi_html("OK",ok_c,"","var(--ok)")}{kpi_html("Baixo",baixos,"","var(--warn)")}{kpi_html("Crítico",criticos,"","var(--err)")}</div>',unsafe_allow_html=True)
+    st.markdown(f'<div class="kpis" style="grid-template-columns:repeat(4,1fr);margin:.7rem 0 1rem;">{kpi_html("Total",total,"","var(--t2)")}{kpi_html("OK",ok_c,"","var(--ok)")}{kpi_html("Estoque Baixo",baixos,"","var(--warn)")}{kpi_html("Estoque Zerado",criticos,"","var(--err)")}</div>',unsafe_allow_html=True)
 
     if ver_reserva:
         dados_xlsx=_planilha_estoque(prods)
@@ -140,7 +147,7 @@ def _inv():
         b=busca.lower(); fil=[p for p in fil if b in p["nome"].lower() or b in p["codigo_interno"].lower() or (p.get("ean") and b in p["ean"].lower())]
     if cf!="Todas": fil=[p for p in fil if p.get("categorias") and p["categorias"]["nome"]==cf]
     if sf!="Todos":
-        def _s(p): t,_=status_estoque(float(p["quantidade_total_secundaria"]),float(p["estoque_minimo_primario"]),float(p["fator_conversao"])); return t
+        def _s(p): t,_=status_estoque(float(p["quantidade_total_secundaria"]),float(p["estoque_minimo_primario"]),float(p["fator_conversao"])); return _rotulo_status(t)
         fil=[p for p in fil if _s(p)==sf]
     st.markdown(f'<div class="card"><div class="card-h">Produtos ({len(fil)})</div>',unsafe_allow_html=True)
 
@@ -177,7 +184,7 @@ def _inv():
                 f'padding-bottom:.4rem;margin-bottom:.3rem;">{txt}</div>', unsafe_allow_html=True)
         for p in fil_pag:
             est=float(p["quantidade_total_secundaria"]); minp=float(p["estoque_minimo_primario"]); fat=float(p["fator_conversao"])
-            estp=est/fat if fat else 0; txt,cls=status_estoque(est,minp,fat)
+            estp=est/fat if fat else 0; txt,cls=status_estoque(est,minp,fat); txt=_rotulo_status(txt)
             cat=(p.get("categorias") or {}).get("nome","—"); up_lbl=sigla_para_opcao(p["unidade_primaria"]); us_lbl=sigla_para_opcao(p["unidade_secundaria"])
             res_qtd=reservas.get(p["id"],0.0) if ver_reserva else 0.0
             res_html=f'<br><span style="font-size:.7rem;color:var(--warn);font-weight:600;">🔒 Reservado: {qtd_br(res_qtd)} {us_lbl}</span>' if res_qtd>0 else ''
