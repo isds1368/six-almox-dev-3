@@ -16,6 +16,19 @@ def _u(label,val="UN",key=None):
     kw={"key":key} if key else {}
     return opcao_para_sigla(st.selectbox(label,OPCOES,index=idx,**kw))
 
+# ── Tokens de tipografia — harmoniza os tamanhos de fonte em toda a página de Estoque ──
+FS_HEAD  = ".68rem"   # cabeçalhos de coluna/rótulos em uppercase
+FS_BODY  = ".84rem"   # texto principal das células (nome, valores de destaque)
+FS_SUB   = ".71rem"   # texto secundário/apoio (conversões, tags, datas)
+FS_MICRO = ".66rem"   # rótulos muito pequenos (hints, legendas)
+FS_HERO  = "1.35rem"  # números grandes em destaque (ex.: estoque atual no ajuste)
+
+def _moeda(v):
+    """Formata um valor numérico como moeda brasileira: R$ 1.234,56."""
+    v=float(v or 0)
+    s=f"{v:,.2f}".replace(",","X").replace(".",",").replace("X",".")
+    return f"R$ {s}"
+
 # Rótulos de status do sistema: apenas 3 existem — "OK", "Estoque Baixo" e "Estoque Zerado".
 # status_estoque() (utils/ui) ainda retorna os nomes antigos ("Baixo"/"Crítico") por baixo dos panos;
 # aqui traduzimos para exibição, sem tocar na classe css (cls) que ele também retorna.
@@ -44,6 +57,7 @@ def _planilha_estoque(prods):
             "Estoque (Primária)":    round(estp,2),
             "Unidade Primária":      sigla_para_opcao(p["unidade_primaria"]),
             "Estoque Mínimo (Prim.)":round(minp,2),
+            "Valor Última Compra (R$)": round(float(p.get("valor_unitario") or 0),2),
             "Status":                status,
             "Essencial":             "⭐ Sim" if p.get("essencial") else "Não",
             "Reposição Contínua":    "Sim" if p.get("reposicao_continua") else "Não",
@@ -174,29 +188,34 @@ def _inv():
     fil_pag=fil[ini:fim]
 
     if fil_pag:
-        head_ratio = [1.8, 0.8, 0.9, 1.1, 1.5, 0.9, 0.85, 1.0, 1.15, 0.7]
-        heads = ["Produto","Código","EAN","Categoria","Estoque","Mínimo","Status","Essencial","Repos. Contínua","Foto"]
+        head_ratio = [1.65, 0.72, 0.8, 1.0, 1.35, 0.8, 1.0, 0.8, 0.95, 1.05, 0.6]
+        heads = ["Produto","Código","EAN","Categoria","Estoque","Mínimo","Valor Última Compra","Status","Essencial","Repos. Contínua","Foto"]
         hc = st.columns(head_ratio)
         for col, txt in zip(hc, heads):
             col.markdown(
-                f'<div style="font-size:.72rem;font-weight:700;color:var(--t3);'
+                f'<div style="font-size:{FS_HEAD};font-weight:700;color:var(--t3);'
                 f'letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid var(--bdr);'
-                f'padding-bottom:.4rem;margin-bottom:.3rem;">{txt}</div>', unsafe_allow_html=True)
+                f'padding-bottom:.4rem;margin-bottom:.35rem;line-height:1.25;">{txt}</div>', unsafe_allow_html=True)
         for p in fil_pag:
             est=float(p["quantidade_total_secundaria"]); minp=float(p["estoque_minimo_primario"]); fat=float(p["fator_conversao"])
             estp=est/fat if fat else 0; txt,cls=status_estoque(est,minp,fat); txt=_rotulo_status(txt)
             cat=(p.get("categorias") or {}).get("nome","—"); up_lbl=sigla_para_opcao(p["unidade_primaria"]); us_lbl=sigla_para_opcao(p["unidade_secundaria"])
             res_qtd=reservas.get(p["id"],0.0) if ver_reserva else 0.0
-            res_html=f'<br><span style="font-size:.7rem;color:var(--warn);font-weight:600;">🔒 Reservado: {qtd_br(res_qtd)} {us_lbl}</span>' if res_qtd>0 else ''
+            res_html=f'<br><span style="font-size:{FS_MICRO};color:var(--warn);font-weight:600;">🔒 Reservado: {qtd_br(res_qtd)} {us_lbl}</span>' if res_qtd>0 else ''
+            valor_un=p.get("valor_unitario")
+            valor_html=(f'<strong style="font-size:{FS_BODY};">{_moeda(valor_un)}</strong>'
+                        f'<br><span style="font-size:{FS_MICRO};color:var(--t3);">/{us_lbl}</span>'
+                        if valor_un else f'<span style="font-size:{FS_SUB};color:var(--t4);">— não informado</span>')
             rc = st.columns(head_ratio)
-            rc[0].markdown(f'<strong>{esc(p["nome"])}</strong>', unsafe_allow_html=True)
-            rc[1].markdown(f'<span class="mono">{esc(p["codigo_interno"])}</span>', unsafe_allow_html=True)
-            rc[2].markdown(f'<span class="mono" style="color:var(--t4);">{esc(p.get("ean") or "—")}</span>', unsafe_allow_html=True)
-            rc[3].markdown(f'<span style="color:var(--t3);">{esc(cat)}</span>', unsafe_allow_html=True)
-            rc[4].markdown(f'<strong>{qtd_br(est)} {us_lbl}</strong><br><span style="font-size:.71rem;color:var(--t3);">= {qtd_br(estp)} {up_lbl}</span>{res_html}', unsafe_allow_html=True)
-            rc[5].markdown(f'<span style="color:var(--t3);">{qtd_br(minp)} {up_lbl}</span>', unsafe_allow_html=True)
-            rc[6].markdown(badge(txt,cls), unsafe_allow_html=True)
-            for campo,col in (("essencial",rc[7]),("reposicao_continua",rc[8])):
+            rc[0].markdown(f'<span style="font-size:{FS_BODY};font-weight:700;">{esc(p["nome"])}</span>', unsafe_allow_html=True)
+            rc[1].markdown(f'<span class="mono" style="font-size:{FS_SUB};">{esc(p["codigo_interno"])}</span>', unsafe_allow_html=True)
+            rc[2].markdown(f'<span class="mono" style="font-size:{FS_SUB};color:var(--t4);">{esc(p.get("ean") or "—")}</span>', unsafe_allow_html=True)
+            rc[3].markdown(f'<span style="font-size:{FS_SUB};color:var(--t3);">{esc(cat)}</span>', unsafe_allow_html=True)
+            rc[4].markdown(f'<span style="font-size:{FS_BODY};font-weight:700;">{qtd_br(est)} {us_lbl}</span><br><span style="font-size:{FS_MICRO};color:var(--t3);">= {qtd_br(estp)} {up_lbl}</span>{res_html}', unsafe_allow_html=True)
+            rc[5].markdown(f'<span style="font-size:{FS_SUB};color:var(--t3);">{qtd_br(minp)} {up_lbl}</span>', unsafe_allow_html=True)
+            rc[6].markdown(valor_html, unsafe_allow_html=True)
+            rc[7].markdown(badge(txt,cls), unsafe_allow_html=True)
+            for campo,col in (("essencial",rc[8]),("reposicao_continua",rc[9])):
                 with col:
                     if pode_classificar:
                         atual=bool(p.get(campo))
@@ -206,8 +225,8 @@ def _inv():
                         if novo!=atual:
                             st.session_state["class_pendente"]={"produto_id":p["id"],"nome":p["nome"],"campo":campo,"novo":novo}
                     else:
-                        st.markdown('⭐' if p.get(campo) else '—', unsafe_allow_html=True)
-            with rc[9]:
+                        st.markdown(f'<span style="font-size:{FS_BODY};">{"⭐" if p.get(campo) else "—"}</span>', unsafe_allow_html=True)
+            with rc[10]:
                 if st.button("📷", key=f"foto_btn_{p['id']}", use_container_width=True, help="Ver/gerenciar foto"):
                     st.session_state["foto_produto"]=p
                     st.session_state.pop("foto_modo",None)
@@ -216,7 +235,7 @@ def _inv():
         if st.session_state.get("class_pendente"):
             _dialog_confirmar_classificacao()
     else:
-        st.markdown('<div style="text-align:center;color:var(--t3);padding:2rem;">Nenhum resultado</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="text-align:center;color:var(--t3);font-size:{FS_SUB};padding:2rem;">Nenhum resultado</div>', unsafe_allow_html=True)
 
     if fil and total_paginas>1:
         cn1,cn2,cn3=st.columns([1,2,1])
@@ -224,7 +243,7 @@ def _inv():
             if st.button("← Anterior",disabled=(pagina<=1),key="inv_prev",use_container_width=True):
                 st.session_state["inv_pagina"]=pagina-1; st.rerun()
         with cn2:
-            st.markdown(f'<div style="text-align:center;color:var(--t3);padding-top:.45rem;font-size:.82rem;">Página {pagina} de {total_paginas}</div>',unsafe_allow_html=True)
+            st.markdown(f'<div style="text-align:center;color:var(--t3);padding-top:.45rem;font-size:{FS_SUB};">Página {pagina} de {total_paginas}</div>',unsafe_allow_html=True)
         with cn3:
             if st.button("Próxima →",disabled=(pagina>=total_paginas),key="inv_next",use_container_width=True):
                 st.session_state["inv_pagina"]=pagina+1; st.rerun()
@@ -267,7 +286,7 @@ def _hist_modal(prod):
     fig.update_layout(**_PL,height=280,barmode="relative",legend=dict(bgcolor="rgba(0,0,0,0)"),
                       xaxis=dict(gridcolor="rgba(0,0,0,.05)"),yaxis=dict(gridcolor="rgba(0,0,0,.05)",title=f"Qtd ({us_lbl})"))
     st.plotly_chart(fig,use_container_width=True)
-    st.markdown('<div style="font-size:.75rem;font-weight:700;color:var(--t3);letter-spacing:.06em;text-transform:uppercase;margin:.8rem 0 .4rem;">Detalhamento</div>',unsafe_allow_html=True)
+    st.markdown(f'<div style="font-size:{FS_HEAD};font-weight:700;color:var(--t3);letter-spacing:.06em;text-transform:uppercase;margin:.8rem 0 .4rem;">Detalhamento</div>',unsafe_allow_html=True)
     rows=""
     for m in reversed(movs):
         tipo=m.get("tipo",""); cor="var(--ok)" if tipo=="entrada" else "var(--err)"
@@ -276,7 +295,7 @@ def _hist_modal(prod):
         un_lbl=sigla_para_opcao(m.get("unidade_informada","UN"))
         exe=(m.get("exe") or {}).get("nick",""); sol=(m.get("sol") or {}).get("nick","")
         resp=exe if exe else sol; subtipo=m.get("tipo_entrada") or m.get("tipo_saida") or "—"
-        rows+=f'<tr><td style="color:var(--t3);font-size:.73rem;">{datahora_br(m["criado_em"])}</td><td><strong style="color:{cor};">{tipo_lbl}</strong></td><td style="color:var(--t3);font-size:.75rem;">{subtipo}</td><td style="color:{cor};font-weight:700;font-family:var(--mono);">{sinal}{qtd_br(m["quantidade_convertida"])} {un_lbl}</td><td>{m.get("setor_solicitante") or "—"}</td><td style="color:var(--t3);">{m.get("numero_nf") or "—"}</td><td style="color:var(--t3);">{resp}</td></tr>'
+        rows+=f'<tr><td style="color:var(--t3);font-size:{FS_SUB};">{datahora_br(m["criado_em"])}</td><td style="font-size:{FS_BODY};"><strong style="color:{cor};">{tipo_lbl}</strong></td><td style="color:var(--t3);font-size:{FS_SUB};">{subtipo}</td><td style="color:{cor};font-weight:700;font-family:var(--mono);font-size:{FS_BODY};">{sinal}{qtd_br(m["quantidade_convertida"])} {un_lbl}</td><td style="font-size:{FS_SUB};">{m.get("setor_solicitante") or "—"}</td><td style="color:var(--t3);font-size:{FS_SUB};">{m.get("numero_nf") or "—"}</td><td style="color:var(--t3);font-size:{FS_SUB};">{resp}</td></tr>'
     st.markdown(f'<table class="tbl"><thead><tr><th>Data/Hora</th><th>Tipo</th><th>Subtipo</th><th>Quantidade</th><th>Setor</th><th>NF</th><th>Responsável</th></tr></thead><tbody>{rows}</tbody></table>',unsafe_allow_html=True)
     st.markdown("</div>",unsafe_allow_html=True)
 
@@ -354,7 +373,7 @@ def _ajuste():
     if st.session_state.get("ajuste_sucesso"):
         info=st.session_state["ajuste_sucesso"]
         st.success("✅ Ajuste realizado com sucesso!")
-        st.markdown(f'<div style="font-size:.85rem;color:var(--t3);">Estoque de **{info["nome"]}** definido para <strong>{qtd_br(info["nova"])} {info["unidade"]}</strong>.</div>',unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:{FS_SUB};color:var(--t3);">Estoque de **{info["nome"]}** definido para <strong>{qtd_br(info["nova"])} {info["unidade"]}</strong>.</div>',unsafe_allow_html=True)
         if st.button("➕ Sugerir novo ajuste",type="primary",use_container_width=True):
             # limpa o estado do produto ajustado para os campos voltarem ao padrão
             st.session_state.pop(f"ajuste_nova_{info['prod_id']}",None)
@@ -374,14 +393,14 @@ def _ajuste():
 
     c1,c2=st.columns(2)
     with c1:
-        st.markdown(f'<div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:7px;padding:.7rem;margin-bottom:.5rem;"><div style="font-size:.65rem;color:var(--t3);">ATUAL</div><div style="font-size:1.4rem;font-weight:700;">{qtd_br(est)} {us_lbl}</div><div style="font-size:.72rem;color:var(--t3);">= {qtd_br(est/fat if fat else 0)} {up_lbl}</div></div>',unsafe_allow_html=True)
+        st.markdown(f'<div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:7px;padding:.7rem;margin-bottom:.5rem;"><div style="font-size:{FS_MICRO};color:var(--t3);letter-spacing:.04em;text-transform:uppercase;">Atual</div><div style="font-size:{FS_HERO};font-weight:700;">{qtd_br(est)} {us_lbl}</div><div style="font-size:{FS_SUB};color:var(--t3);">= {qtd_br(est/fat if fat else 0)} {up_lbl}</div></div>',unsafe_allow_html=True)
         # key por produto -> reseta valor automaticamente ao trocar de item
         nova=st.number_input(f"Quantidade atual (Ajuste acrescentando ou diminuindo o valor de acordo com o que há no estoque físico) ({us_lbl}) *",min_value=0.0,value=est,step=1.0,key=f"ajuste_nova_{prod['id']}")
     with c2:
         motivo=st.text_area("Motivo *",height=100,key=f"ajuste_motivo_{prod['id']}")
 
     diff=nova-est; cor="var(--ok)" if diff>=0 else "var(--err)"
-    st.markdown(f'<div style="font-size:.78rem;color:var(--t3);padding:.2rem 0;">Variação: <strong style="color:{cor};">{("+" if diff>=0 else "")}{qtd_br(diff)} {us_lbl}</strong></div>',unsafe_allow_html=True)
+    st.markdown(f'<div style="font-size:{FS_SUB};color:var(--t3);padding:.2rem 0;">Variação: <strong style="color:{cor};">{("+" if diff>=0 else "")}{qtd_br(diff)} {us_lbl}</strong></div>',unsafe_allow_html=True)
 
     if st.button("Aplicar ↓",type="primary",use_container_width=True):
         if not motivo.strip():
@@ -424,13 +443,14 @@ def _editar():
             fe=st.number_input("Fator",value=float(p["fator_conversao"]),min_value=0.001)
             eme=st.number_input("Est. mín (prim)",value=float(p["estoque_minimo_primario"]),min_value=0.0)
             eane=st.text_input("CODIGO DO PRODUTO",value=p.get("ean") or ""); ate=st.checkbox("Ativo",value=p.get("ativo",True))
+            ve=st.number_input("Valor Unitário (R$) — Valor última compra",value=float(p.get("valor_unitario") or 0.0),min_value=0.0,step=0.01,format="%.2f")
         de=st.text_area("Descrição",value=p.get("descricao") or "")
         fote=st.text_input("URL da Foto (opcional)",value=p.get("foto_url") or "",help="Cole o link de uma imagem do produto (ex.: link do Supabase Storage).")
         if fote.strip():
             st.image(fote.strip(),width=160)
         st.caption("💡 Classificação de Essencial / Reposição Contínua agora é feita direto na aba Inventário.")
         if st.form_submit_button("Salvar →",type="primary"):
-            atualizar_produto(p["id"],{"nome":ne.strip(),"categoria_id":cm.get(ce),"unidade_primaria":upe,"unidade_secundaria":use,"fator_conversao":fe,"estoque_minimo_primario":eme,"ean":eane.strip() or None,"descricao":de.strip() or None,"ativo":ate,"foto_url":fote.strip() or None})
+            atualizar_produto(p["id"],{"nome":ne.strip(),"categoria_id":cm.get(ce),"unidade_primaria":upe,"unidade_secundaria":use,"fator_conversao":fe,"estoque_minimo_primario":eme,"ean":eane.strip() or None,"descricao":de.strip() or None,"ativo":ate,"foto_url":fote.strip() or None,"valor_unitario":ve if ve>0 else None})
             st.success("✅ Produto atualizado!"); st.rerun()
     st.markdown("</div>",unsafe_allow_html=True)
 
@@ -444,6 +464,6 @@ def _hist_aj():
         prod=a.get("produto") or {}; eu=(a.get("exe") or {}).get("nick","—")
         ds=f"+{qtd_br(a['quantidade_convertida'])}" if a["tipo"]=="entrada" else f"-{qtd_br(a['quantidade_convertida'])}"
         cor="var(--ok)" if a["tipo"]=="entrada" else "var(--err)"; obs=(a.get("observacao") or "").replace("[AJUSTE] ",""); un_lbl=sigla_para_opcao(a.get("unidade_informada","UN"))
-        rows+=f'<tr><td style="color:var(--t3);font-size:.73rem;">{datahora_br(a["criado_em"])}</td><td><strong>{prod.get("nome","—")}</strong></td><td style="color:{cor};font-weight:700;font-family:var(--mono);">{ds} {un_lbl}</td><td style="color:var(--t3);font-size:.73rem;">{obs[:50]}{"…" if len(obs)>50 else ""}</td><td style="color:var(--t3);">{eu}</td></tr>'
+        rows+=f'<tr><td style="color:var(--t3);font-size:{FS_SUB};">{datahora_br(a["criado_em"])}</td><td style="font-size:{FS_BODY};"><strong>{prod.get("nome","—")}</strong></td><td style="color:{cor};font-weight:700;font-family:var(--mono);font-size:{FS_BODY};">{ds} {un_lbl}</td><td style="color:var(--t3);font-size:{FS_SUB};">{obs[:50]}{"…" if len(obs)>50 else ""}</td><td style="color:var(--t3);font-size:{FS_SUB};">{eu}</td></tr>'
     st.markdown(f'<table class="tbl"><thead><tr><th>Data</th><th>Produto</th><th>Variação</th><th>Motivo</th><th>Responsável</th></tr></thead><tbody>{rows}</tbody></table>',unsafe_allow_html=True)
     st.markdown("</div>",unsafe_allow_html=True)
