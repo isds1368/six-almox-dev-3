@@ -151,15 +151,49 @@ def atualizar_produto(pid, dados):
         _log.error("atualizar_produto: %s", e)
         st.error("❌ Erro ao atualizar produto.")
 
+# ── CLASSIFICAÇÕES MANUAIS DE PRODUTO (tabela auxiliar, não altera "produtos") ──
+# Guarda marcações como "essencial" e "reposição contínua" numa tabela própria
+# (produto_flags), para não precisar alterar o schema da tabela "produtos".
+
+def listar_classificacoes_produtos() -> dict:
+    """Retorna {produto_id: {'essencial':bool,'reposicao_continua':bool}} a partir de produto_flags."""
+    try:
+        linhas = get_sb().table("produto_flags").select("produto_id,essencial,reposicao_continua").execute().data or []
+        return {l["produto_id"]: l for l in linhas}
+    except Exception as e:
+        _log.error("listar_classificacoes_produtos: %s", e)
+        return {}
+
+def mesclar_classificacoes(produtos: list) -> list:
+    """Injeta em cada produto (in-place) as flags 'essencial' e 'reposicao_continua'
+    vindas da tabela produto_flags. Não toca na tabela produtos nem no resultado de
+    listar_produtos() além de adicionar essas duas chaves no dicionário em memória."""
+    flags = listar_classificacoes_produtos()
+    for p in produtos:
+        f = flags.get(p["id"], {})
+        p["essencial"] = bool(f.get("essencial", False))
+        p["reposicao_continua"] = bool(f.get("reposicao_continua", False))
+    return produtos
+
+def definir_classificacao_produto(produto_id: str, campo: str, valor: bool) -> bool:
+    """Marca/desmarca 'essencial' ou 'reposicao_continua' para um produto (upsert em produto_flags)."""
+    if campo not in ("essencial", "reposicao_continua"):
+        raise ValueError("campo inválido: use 'essencial' ou 'reposicao_continua'")
+    try:
+        get_sb().table("produto_flags").upsert(
+            {"produto_id": produto_id, campo: valor}, on_conflict="produto_id"
+        ).execute()
+        return True
+    except Exception as e:
+        _log.error("definir_classificacao_produto: %s", e)
+        st.error("❌ Erro ao salvar classificação do insumo.")
+        return False
+
 def listar_produtos_essenciais(apenas_ativos=True) -> list:
     """Retorna apenas os produtos marcados manualmente como essenciais (prioridade de estoque/previsão)."""
-    try:
-        q = get_sb().table("produtos").select("*,categorias(nome)").eq("essencial", True).order("nome")
-        if apenas_ativos: q = q.eq("ativo", True)
-        return q.execute().data or []
-    except Exception as e:
-        _log.error("listar_produtos_essenciais: %s", e)
-        return []
+    prods = listar_produtos(apenas_ativos=apenas_ativos)
+    mesclar_classificacoes(prods)
+    return [p for p in prods if p.get("essencial")]
 
 # ── ESTOQUE COM RESERVAS ─────────────────────────────────────────
 def estoque_disponivel(produto_id: str) -> float:
