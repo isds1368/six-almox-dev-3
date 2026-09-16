@@ -94,14 +94,14 @@ def tela_dashboard():
 def _saude_essenciais(produtos):
     essenciais = [p for p in produtos if p.get("essencial")]
     st.markdown(
-        '<div class="card"><div class="card-h">⭐ Saúde do Estoque — Insumos Essenciais</div>',
+        '<div class="card"><div class="card-h">⭐ Saúde do Estoque — Insumos Estratégicos</div>',
         unsafe_allow_html=True,
     )
     if not essenciais:
         st.markdown(
             '<p style="color:var(--t3);font-size:.82rem;text-align:center;padding:1rem">'
-            'Nenhum insumo classificado como essencial ainda. Classifique em '
-            '<strong>Estoque → ⭐ Essenciais</strong>.</p>',
+            'Nenhum insumo classificado como estratégico ainda. Classifique em '
+            '<strong>Estoque → Inventário</strong>.</p>',
             unsafe_allow_html=True,
         )
         st.markdown("</div>", unsafe_allow_html=True)
@@ -151,13 +151,13 @@ def _saude_essenciais(produtos):
 def _reposicao_essenciais(produtos):
     essenciais = [p for p in produtos if p.get("essencial")]
     st.markdown(
-        '<div class="card"><div class="card-h">📅 Previsão de Reposição — Insumos Essenciais</div>',
+        '<div class="card"><div class="card-h">📅 Previsão de Reposição — Insumos Estratégicos</div>',
         unsafe_allow_html=True,
     )
     if not essenciais:
         st.markdown(
             '<p style="color:var(--t3);font-size:.82rem;text-align:center;padding:1rem">'
-            'Nenhum insumo essencial classificado.</p>',
+            'Nenhum insumo estratégico classificado.</p>',
             unsafe_allow_html=True,
         )
         st.markdown("</div>", unsafe_allow_html=True)
