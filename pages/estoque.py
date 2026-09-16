@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from utils.database import (listar_produtos, listar_categorias, atualizar_produto,
     registrar_movimentacao, listar_movimentacoes, historico_produto, listar_solicitacoes)
-from utils.database import listar_produtos_essenciais  # noqa: F401 (reexportado para uso em outras telas, ex. previsão)
+from utils.database import mesclar_classificacoes, definir_classificacao_produto  # classificação manual (produto_flags)
 from utils.auth import sessao, is_admin, is_almoxarife
 from utils.ui import badge, status_estoque, kpi_html
 from utils.fmt import qtd_br, datahora_br
@@ -39,6 +39,7 @@ def _planilha_estoque(prods):
             "Estoque Mínimo (Prim.)":round(minp,2),
             "Status":                status,
             "Essencial":             "⭐ Sim" if p.get("essencial") else "Não",
+            "Reposição Contínua":    "Sim" if p.get("reposicao_continua") else "Não",
             "Ativo":                 "Sim" if p.get("ativo",True) else "Não",
         })
     df=pd.DataFrame(linhas)
@@ -67,32 +68,44 @@ def tela_estoque():
     else: tl[1]; _hist_aj()
     st.markdown("</div>",unsafe_allow_html=True)
 
+_ROTULOS_CLASSIFICACAO = {
+    "essencial": {
+        "titulo": "essencial",
+        "dica_on": "Insumos essenciais recebem prioridade na Saúde de Estoque e na Previsão de Reposição do Dashboard.",
+        "dica_off": "O insumo deixará de aparecer nos painéis de prioridade do Dashboard.",
+    },
+    "reposicao_continua": {
+        "titulo": "de reposição contínua",
+        "dica_on": "Insumos de reposição contínua são tratados como itens de giro constante, priorizados no cálculo de previsão.",
+        "dica_off": "O insumo deixará de ser tratado como item de reposição contínua.",
+    },
+}
+
 @st.dialog("Confirmar classificação de insumo")
-def _dialog_confirmar_essencial():
-    pend=st.session_state.get("ess_pendente")
+def _dialog_confirmar_classificacao():
+    pend=st.session_state.get("class_pendente")
     if not pend:
         st.rerun(); return
+    rot=_ROTULOS_CLASSIFICACAO[pend["campo"]]
     acao="marcar" if pend["novo"] else "desmarcar"
-    st.markdown(f'Deseja **{acao}** o insumo **{esc(pend["nome"])}** como essencial?')
-    if pend["novo"]:
-        st.caption("Insumos essenciais recebem prioridade na Saúde de Estoque e na Previsão de Reposição do Dashboard.")
-    else:
-        st.caption("O insumo deixará de aparecer nos painéis de prioridade do Dashboard.")
+    st.markdown(f'Deseja **{acao}** o insumo **{esc(pend["nome"])}** como **{rot["titulo"]}**?')
+    st.caption(rot["dica_on"] if pend["novo"] else rot["dica_off"])
     cc1,cc2=st.columns(2)
     with cc1:
-        if st.button("✅ Confirmar",type="primary",use_container_width=True,key="ess_dialog_confirmar"):
-            atualizar_produto(pend["produto_id"],{"essencial":pend["novo"]})
-            st.session_state.pop("ess_pendente",None)
+        if st.button("✅ Confirmar",type="primary",use_container_width=True,key="class_dialog_confirmar"):
+            definir_classificacao_produto(pend["produto_id"],pend["campo"],pend["novo"])
+            st.session_state.pop("class_pendente",None)
             st.rerun()
     with cc2:
-        if st.button("Cancelar",use_container_width=True,key="ess_dialog_cancelar"):
-            st.session_state.pop(f"ess_sel_{pend['produto_id']}",None)  # reseta a selectbox para o valor salvo
-            st.session_state.pop("ess_pendente",None)
+        if st.button("Cancelar",use_container_width=True,key="class_dialog_cancelar"):
+            st.session_state.pop(f"{pend['campo']}_sel_{pend['produto_id']}",None)  # reseta a selectbox para o valor salvo
+            st.session_state.pop("class_pendente",None)
             st.rerun()
 
 def _inv():
     prods=listar_produtos(); cats=listar_categorias()
     if not prods: st.info("Nenhum produto."); return
+    mesclar_classificacoes(prods)
     ver_reserva=is_almoxarife()
     pode_classificar=is_admin() or is_almoxarife()
     reservas={}
@@ -154,8 +167,8 @@ def _inv():
     fil_pag=fil[ini:fim]
 
     if fil_pag:
-        head_ratio = [2.0, 0.9, 1.0, 1.2, 1.6, 1.0, 0.9, 1.1, 0.8]
-        heads = ["Produto","Código","EAN","Categoria","Estoque","Mínimo","Status","Essencial","Foto"]
+        head_ratio = [1.8, 0.8, 0.9, 1.1, 1.5, 0.9, 0.85, 1.0, 1.15, 0.7]
+        heads = ["Produto","Código","EAN","Categoria","Estoque","Mínimo","Status","Essencial","Repos. Contínua","Foto"]
         hc = st.columns(head_ratio)
         for col, txt in zip(hc, heads):
             col.markdown(
@@ -176,24 +189,25 @@ def _inv():
             rc[4].markdown(f'<strong>{qtd_br(est)} {us_lbl}</strong><br><span style="font-size:.71rem;color:var(--t3);">= {qtd_br(estp)} {up_lbl}</span>{res_html}', unsafe_allow_html=True)
             rc[5].markdown(f'<span style="color:var(--t3);">{qtd_br(minp)} {up_lbl}</span>', unsafe_allow_html=True)
             rc[6].markdown(badge(txt,cls), unsafe_allow_html=True)
-            with rc[7]:
-                if pode_classificar:
-                    atual_ess=bool(p.get("essencial"))
-                    sel=st.selectbox("Essencial",["Não","Sim"],index=1 if atual_ess else 0,
-                                      key=f"ess_sel_{p['id']}",label_visibility="collapsed")
-                    novo_ess=(sel=="Sim")
-                    if novo_ess!=atual_ess:
-                        st.session_state["ess_pendente"]={"produto_id":p["id"],"nome":p["nome"],"novo":novo_ess}
-                else:
-                    st.markdown('⭐' if p.get("essencial") else '—', unsafe_allow_html=True)
-            with rc[8]:
+            for campo,col in (("essencial",rc[7]),("reposicao_continua",rc[8])):
+                with col:
+                    if pode_classificar:
+                        atual=bool(p.get(campo))
+                        sel=st.selectbox(campo,["Não","Sim"],index=1 if atual else 0,
+                                          key=f"{campo}_sel_{p['id']}",label_visibility="collapsed")
+                        novo=(sel=="Sim")
+                        if novo!=atual:
+                            st.session_state["class_pendente"]={"produto_id":p["id"],"nome":p["nome"],"campo":campo,"novo":novo}
+                    else:
+                        st.markdown('⭐' if p.get(campo) else '—', unsafe_allow_html=True)
+            with rc[9]:
                 if st.button("📷", key=f"foto_btn_{p['id']}", use_container_width=True, help="Ver/gerenciar foto"):
                     st.session_state["foto_produto"]=p
                     st.session_state.pop("foto_modo",None)
                     st.rerun()
             st.markdown('<hr style="margin:.35rem 0;border:none;border-top:1px solid var(--bdr);">', unsafe_allow_html=True)
-        if st.session_state.get("ess_pendente"):
-            _dialog_confirmar_essencial()
+        if st.session_state.get("class_pendente"):
+            _dialog_confirmar_classificacao()
     else:
         st.markdown('<div style="text-align:center;color:var(--t3);padding:2rem;">Nenhum resultado</div>', unsafe_allow_html=True)
 
@@ -403,13 +417,13 @@ def _editar():
             fe=st.number_input("Fator",value=float(p["fator_conversao"]),min_value=0.001)
             eme=st.number_input("Est. mín (prim)",value=float(p["estoque_minimo_primario"]),min_value=0.0)
             eane=st.text_input("CODIGO DO PRODUTO",value=p.get("ean") or ""); ate=st.checkbox("Ativo",value=p.get("ativo",True))
-            esse=st.checkbox("⭐ Insumo Essencial",value=bool(p.get("essencial")))
         de=st.text_area("Descrição",value=p.get("descricao") or "")
         fote=st.text_input("URL da Foto (opcional)",value=p.get("foto_url") or "",help="Cole o link de uma imagem do produto (ex.: link do Supabase Storage).")
         if fote.strip():
             st.image(fote.strip(),width=160)
+        st.caption("💡 Classificação de Essencial / Reposição Contínua agora é feita direto na aba Inventário.")
         if st.form_submit_button("Salvar →",type="primary"):
-            atualizar_produto(p["id"],{"nome":ne.strip(),"categoria_id":cm.get(ce),"unidade_primaria":upe,"unidade_secundaria":use,"fator_conversao":fe,"estoque_minimo_primario":eme,"ean":eane.strip() or None,"descricao":de.strip() or None,"ativo":ate,"foto_url":fote.strip() or None,"essencial":esse})
+            atualizar_produto(p["id"],{"nome":ne.strip(),"categoria_id":cm.get(ce),"unidade_primaria":upe,"unidade_secundaria":use,"fator_conversao":fe,"estoque_minimo_primario":eme,"ean":eane.strip() or None,"descricao":de.strip() or None,"ativo":ate,"foto_url":fote.strip() or None})
             st.success("✅ Produto atualizado!"); st.rerun()
     st.markdown("</div>",unsafe_allow_html=True)
 
