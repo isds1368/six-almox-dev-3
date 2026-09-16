@@ -16,6 +16,13 @@ _PL = dict(
     legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
 )
 
+# Rótulos de status do sistema: apenas 3 existem — "OK", "Estoque Baixo" e "Estoque Zerado".
+# status_estoque() (utils/ui) ainda retorna os nomes antigos ("Baixo"/"Crítico") por baixo dos panos;
+# aqui traduzimos para exibição, sem tocar na classe css (cls) que ele também retorna.
+_ROTULOS_STATUS = {"Baixo": "Estoque Baixo", "Crítico": "Estoque Zerado"}
+def _rotulo_status(txt):
+    return _ROTULOS_STATUS.get(txt, txt)
+
 
 def tela_dashboard():
     st.markdown('<div class="pg">', unsafe_allow_html=True)
@@ -32,8 +39,8 @@ def tela_dashboard():
     <div class="kpis">
         {kpi_html("Produtos",       s["total_produtos"],       "ativos",            "var(--red)")}
         {kpi_html("OK",             s["ok"],                   "acima do mínimo",   "var(--ok)")}
-        {kpi_html("Baixo",          s["baixos"],               "abaixo do mínimo",  "var(--warn)")}
-        {kpi_html("Crítico",        s["criticos"],             "sem estoque",       "var(--err)")}
+        {kpi_html("Estoque Baixo",  s["baixos"],               "abaixo do mínimo",  "var(--warn)")}
+        {kpi_html("Estoque Zerado", s["criticos"],             "sem estoque",       "var(--err)")}
         {kpi_html("Solicitações",   s["pend_solicitacoes"],    "pendentes",         "#7C3AED")}
         {kpi_html("Notas NF",       s["pend_notas"],           "aguardando envio",  "var(--info)")}
         {kpi_html("Parados 30d",    s["parados"],              "sem movimentação",  "var(--t3)")}
@@ -133,7 +140,7 @@ def _saude_essenciais(produtos):
     st.plotly_chart(fig, use_container_width=True)
     st.markdown(
         '<div style="font-size:.72rem;color:var(--t3);margin-top:.3rem;">'
-        '🟢 Saudável &nbsp;·&nbsp; 🟠 Abaixo do mínimo &nbsp;·&nbsp; 🔴 Zerado</div>',
+        '🟢 OK &nbsp;·&nbsp; 🟠 Estoque Baixo &nbsp;·&nbsp; 🔴 Estoque Zerado</div>',
         unsafe_allow_html=True,
     )
     st.markdown("</div>", unsafe_allow_html=True)
@@ -258,7 +265,7 @@ def _pie(s):
         unsafe_allow_html=True,
     )
     fig = go.Figure(go.Pie(
-        labels=["OK","Baixo","Crítico"],
+        labels=["OK","Estoque Baixo","Estoque Zerado"],
         values=[s["ok"], s["baixos"], s["criticos"]],
         hole=0.65,
         marker=dict(
@@ -387,7 +394,7 @@ def _atencao(produtos):
                 f'<tr>'
                 f'<td>{nome[:28]}{"…" if len(nome)>28 else ""}</td>'
                 f'<td class="mono">{qtd_br(est)} {un}</td>'
-                f'<td>{badge(txt,cls)}</td>'
+                f'<td>{badge(_rotulo_status(txt),cls)}</td>'
                 f'</tr>'
             )
         # max-height para 10 linhas (~38px) com scroll
