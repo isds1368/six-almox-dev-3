@@ -244,6 +244,18 @@ def registrar_movimentacao(dados) -> dict:
         _log.error("registrar_movimentacao: %s", e)
         st.error("❌ Erro ao registrar movimentação."); st.stop()
 
+def registrar_entrada_com_valor(dados_mov: dict) -> dict:
+    """Registra uma movimentação de entrada/reabastecimento e, se 'valor_unitario' foi
+    informado no dicionário, também atualiza o cache 'valor_unitario' (Valor última
+    compra) no produto. O valor informado já fica salvo na própria movimentação —
+    preparação para o futuro histórico de variação de preços por produto."""
+    mov = registrar_movimentacao(dados_mov)
+    valor = dados_mov.get("valor_unitario")
+    pid   = dados_mov.get("produto_id")
+    if valor is not None and pid:
+        atualizar_produto(pid, {"valor_unitario": valor})
+    return mov
+
 def atualizar_movimentacao(mid, dados) -> dict:
     try: return get_sb().table("movimentacoes").update(dados).eq("id",mid).execute().data[0]
     except Exception as e:
