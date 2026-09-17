@@ -50,7 +50,7 @@ from collections import defaultdict
 import pandas as pd
 import plotly.graph_objects as go
 from openpyxl.utils import get_column_letter
-from utils.database import historico_saidas_previsao, historico_entradas_previsao
+from utils.database import historico_saidas_previsao, historico_entradas_previsao, listar_classificacoes_produtos
 from utils.auth import pode
 from utils.ui import kpi_html
 from utils.fmt import qtd_br
@@ -117,6 +117,7 @@ def tela_previsao_demanda():
 def _montar_base():
     hist = historico_saidas_previsao(DIAS_HISTORICO)
     entradas = historico_entradas_previsao(DIAS_HISTORICO)
+    flags = listar_classificacoes_produtos()
 
     produtos_map = {}
     setor_movs = defaultdict(list)
@@ -127,6 +128,11 @@ def _montar_base():
         data = (m.get("criado_em") or "")[:10]
         if not pid or not data:
             continue
+        if prod.get("ativo") is False:
+            continue  # produto inativo — fora da previsão (geral e por setor)
+        f = flags.get(pid, {})
+        if not (f.get("essencial") or f.get("reposicao_continua")):
+            continue  # entra só quem é insumo estratégico ou de reposição contínua
         qtd = float(m.get("quantidade_convertida") or 0)
         setor = m.get("setor_solicitante") or "Sem setor"
         item = {"data": data, "qtd": qtd}
