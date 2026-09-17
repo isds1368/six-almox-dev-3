@@ -598,16 +598,38 @@ def tela_saida_aprovada():
         conc = listar_solicitacoes("concluido")
         if not conc: st.info("Nenhum.")
         else:
-            busca = st.text_input("🔍 Buscar por produto, setor ou retirante", key="saprov_busca")
-            if busca.strip():
-                b = busca.lower()
-                conc = [m for m in conc if b in (m.get("produto") or {}).get("nome","").lower()
-                        or b in (m.get("setor_solicitante") or "").lower()
-                        or b in (m.get("nome_solicitante") or "").lower()]
+            # --- Filtros por coluna (mesmo padrão de Solicitações) ---
+            head_ratio=[1.1,1.3,0.8,1.0,1.1,0.9,0.9,1.1]
+            fc=st.columns(head_ratio)
+            with fc[0]: f_data=st.date_input("Data",value=(),key="saprov_f_data",label_visibility="collapsed")
+            with fc[1]: f_produto=st.text_input("Produto",placeholder="🔍 Produto…",key="saprov_f_produto",label_visibility="collapsed")
+            with fc[2]: st.markdown("&nbsp;",unsafe_allow_html=True)
+            with fc[3]: f_setor=st.text_input("Setor",placeholder="🔍 Setor…",key="saprov_f_setor",label_visibility="collapsed")
+            with fc[4]: f_retirante=st.text_input("Retirante",placeholder="🔍 Retirante…",key="saprov_f_retirante",label_visibility="collapsed")
+            with fc[5]: f_aprovador=st.text_input("Aprovador",placeholder="🔍 Aprovador…",key="saprov_f_aprovador",label_visibility="collapsed")
+            with fc[6]: f_executor=st.text_input("Executor",placeholder="🔍 Executor…",key="saprov_f_executor",label_visibility="collapsed")
+            with fc[7]: st.markdown("&nbsp;",unsafe_allow_html=True)
+
+            hc=st.columns(head_ratio)
+            for col,txt in zip(hc,["Data","Produto","Qtd","Setor","Retirante","Aprovador","Executor","Motivo (se ajustado)"]):
+                col.markdown(f'<div style="font-size:.68rem;font-weight:700;color:var(--t3);letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid var(--bdr);padding-bottom:.4rem;margin-bottom:.35rem;">{txt}</div>',unsafe_allow_html=True)
+
+            def _passa(m):
+                if len(f_data)==2:
+                    d0,d1=f_data
+                    dm=datetime.datetime.fromisoformat(m["criado_em"].replace("Z","+00:00")).date()
+                    if not (d0<=dm<=d1): return False
+                if f_produto.strip() and f_produto.strip().lower() not in (m.get("produto") or {}).get("nome","").lower(): return False
+                if f_setor.strip() and f_setor.strip().lower() not in (m.get("setor_solicitante") or "").lower(): return False
+                if f_retirante.strip() and f_retirante.strip().lower() not in (m.get("nome_solicitante") or "").lower(): return False
+                if f_aprovador.strip() and f_aprovador.strip().lower() not in ((m.get("aut") or {}).get("nick","")).lower(): return False
+                if f_executor.strip() and f_executor.strip().lower() not in ((m.get("exe") or {}).get("nick","")).lower(): return False
+                return True
+            conc=[m for m in conc if _passa(m)]
 
             # --- Paginação (mesmo padrão do Inventário) ---
             OPCOES_PP = [10,20,40]
-            filtro_sig = f"{busca}"
+            filtro_sig = f"{f_data}|{f_produto}|{f_setor}|{f_retirante}|{f_aprovador}|{f_executor}"
             if st.session_state.get("saprov_filtro_sig") != filtro_sig:
                 st.session_state["saprov_filtro_sig"] = filtro_sig
                 st.session_state["saprov_pagina"] = 1
@@ -659,16 +681,36 @@ def _tbl(movs, namespace="tbl"):
     if not movs: st.info("Nenhum registro."); return
     st.markdown('<div class="card">', unsafe_allow_html=True)
 
-    busca = st.text_input("🔍 Buscar por produto, setor ou solicitante", key=f"{namespace}_busca")
-    if busca.strip():
-        b = busca.lower()
-        movs = [m for m in movs if b in (m.get("produto") or {}).get("nome","").lower()
-                or b in (m.get("setor_solicitante") or "").lower()
-                or b in (m.get("nome_solicitante") or "").lower()]
+    # --- Filtros por coluna (mesmo padrão de Solicitações) ---
+    head_ratio=[1.2,1.4,0.9,1.1,1.2,1.4,0.9]
+    fc=st.columns(head_ratio)
+    with fc[0]: f_data=st.date_input("Data",value=(),key=f"{namespace}_f_data",label_visibility="collapsed")
+    with fc[1]: f_produto=st.text_input("Produto",placeholder="🔍 Produto…",key=f"{namespace}_f_produto",label_visibility="collapsed")
+    with fc[2]: st.markdown("&nbsp;",unsafe_allow_html=True)
+    with fc[3]: f_setor=st.text_input("Setor",placeholder="🔍 Setor…",key=f"{namespace}_f_setor",label_visibility="collapsed")
+    with fc[4]: f_solic=st.text_input("Solicitante",placeholder="🔍 Solicitante…",key=f"{namespace}_f_solic",label_visibility="collapsed")
+    with fc[5]: st.markdown("&nbsp;",unsafe_allow_html=True)
+    with fc[6]: f_status=st.selectbox("Status",["Todos"]+sorted({m["status"] for m in movs}),key=f"{namespace}_f_status",label_visibility="collapsed")
+
+    hc=st.columns(head_ratio)
+    for col,txt in zip(hc,["Data","Produto","Qtd","Setor","Solicitante","Motivo","Status"]):
+        col.markdown(f'<div style="font-size:.68rem;font-weight:700;color:var(--t3);letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid var(--bdr);padding-bottom:.4rem;margin-bottom:.35rem;">{txt}</div>',unsafe_allow_html=True)
+
+    def _passa(m):
+        if len(f_data)==2:
+            d0,d1=f_data
+            dm=datetime.datetime.fromisoformat(m["criado_em"].replace("Z","+00:00")).date()
+            if not (d0<=dm<=d1): return False
+        if f_produto.strip() and f_produto.strip().lower() not in (m.get("produto") or {}).get("nome","").lower(): return False
+        if f_setor.strip() and f_setor.strip().lower() not in (m.get("setor_solicitante") or "").lower(): return False
+        if f_solic.strip() and f_solic.strip().lower() not in (m.get("nome_solicitante") or "").lower(): return False
+        if f_status!="Todos" and m.get("status")!=f_status: return False
+        return True
+    movs=[m for m in movs if _passa(m)]
 
     # --- Paginação (mesmo padrão do Inventário) ---
     OPCOES_PP = [10,20,40]
-    filtro_sig = f"{busca}"
+    filtro_sig = f"{f_data}|{f_produto}|{f_setor}|{f_solic}|{f_status}"
     if st.session_state.get(f"{namespace}_filtro_sig") != filtro_sig:
         st.session_state[f"{namespace}_filtro_sig"] = filtro_sig
         st.session_state[f"{namespace}_pagina"] = 1
