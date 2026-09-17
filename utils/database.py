@@ -508,7 +508,7 @@ def historico_saidas_previsao(dias: int = 120) -> list:
         return (get_sb().table("movimentacoes")
                 .select("criado_em,produto_id,quantidade_convertida,setor_solicitante,"
                         "produto:produtos(id,nome,codigo_interno,unidade_primaria,unidade_secundaria,"
-                        "quantidade_total_secundaria,estoque_minimo_primario,fator_conversao)")
+                        "quantidade_total_secundaria,estoque_minimo_primario,fator_conversao,ativo)")
                 .eq("tipo","saida").eq("status","concluido")
                 .not_.is_("tipo_saida","null")
                 .gte("criado_em", lim)
