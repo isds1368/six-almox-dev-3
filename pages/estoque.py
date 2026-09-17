@@ -479,6 +479,21 @@ def _editar():
     if not prods: st.info("Nenhum produto."); return
     pm={f"{p['nome']} ({p['codigo_interno']})":p for p in prods}
     st.markdown('<div class="card"><div class="card-h">✏️ Editar Produto</div>',unsafe_allow_html=True)
+
+    # Tela de confirmação pós-edição — mesmo padrão do Ajuste Manual
+    if st.session_state.get("editar_sucesso"):
+        info=st.session_state["editar_sucesso"]
+        st.success("✅ Produto atualizado com sucesso!")
+        st.markdown(f'<div style="font-size:{FS_SUB};color:var(--t3);">Alterações em <strong>{esc(info["nome"])}</strong> salvas.</div>',unsafe_allow_html=True)
+        if st.button("✏️ Editar outro produto",type="primary",use_container_width=True):
+            st.session_state.pop(f"upe_{info['prod_id']}",None)
+            st.session_state.pop(f"use_{info['prod_id']}",None)
+            del st.session_state["editar_sucesso"]
+            st.rerun()
+        st.markdown("</div>",unsafe_allow_html=True)
+        return
+
+    # Selectbox fora do form -> troca de produto atualiza tudo na hora
     sel=st.selectbox("Produto",list(pm.keys()),key="eps"); p=pm[sel]
     with st.form("fep"):
         c1,c2=st.columns(2)
@@ -486,7 +501,9 @@ def _editar():
             ne=st.text_input("Nome",value=p["nome"])
             cc=next((c["nome"] for c in cats if c["id"]==p.get("categoria_id")),list(cm.keys())[0] if cm else "")
             ce=st.selectbox("Categoria",list(cm.keys()),index=list(cm.keys()).index(cc) if cc in cm else 0)
-            upe=_u("Unidade primária",val=p["unidade_primaria"],key="upe"); use=_u("Unidade secundária",val=p["unidade_secundaria"],key="use")
+            # key por produto -> reconhece automaticamente a unidade do insumo selecionado ao trocar de item
+            upe=_u("Unidade primária",val=p["unidade_primaria"],key=f"upe_{p['id']}")
+            use=_u("Unidade secundária",val=p["unidade_secundaria"],key=f"use_{p['id']}")
         with c2:
             fe=st.number_input("Fator",value=float(p["fator_conversao"]),min_value=0.001)
             eme=st.number_input("Est. mín (prim)",value=float(p["estoque_minimo_primario"]),min_value=0.0)
@@ -499,7 +516,8 @@ def _editar():
         st.caption("💡 Classificação de Estratégico / Reposição Contínua agora é feita direto na aba Inventário.")
         if st.form_submit_button("Salvar →",type="primary"):
             atualizar_produto(p["id"],{"nome":ne.strip(),"categoria_id":cm.get(ce),"unidade_primaria":upe,"unidade_secundaria":use,"fator_conversao":fe,"estoque_minimo_primario":eme,"ean":eane.strip() or None,"descricao":de.strip() or None,"ativo":ate,"foto_url":fote.strip() or None,"valor_unitario":ve if ve>0 else None})
-            st.success("✅ Produto atualizado!"); st.rerun()
+            st.session_state["editar_sucesso"]={"prod_id":p["id"],"nome":ne.strip()}
+            st.rerun()
     st.markdown("</div>",unsafe_allow_html=True)
 
 def _hist_aj():
