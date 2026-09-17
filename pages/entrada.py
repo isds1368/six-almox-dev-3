@@ -1,5 +1,6 @@
 """pages/entrada.py — Entrada com Reabastecimento, CNR obrigatório e sucesso visual"""
 import streamlit as st
+import datetime
 from utils.database import (buscar_produto_por_ean, buscar_produtos_por_nome,
     criar_produto, registrar_entrada_com_valor, criar_documento,
     upload_pdf, listar_categorias, listar_movimentacoes, buscar_produto_por_id,
@@ -432,16 +433,38 @@ def _hist():
     st.markdown('<div class="card"><div class="card-h">Histórico de Entradas</div>',
                 unsafe_allow_html=True)
 
-    busca = st.text_input("🔍 Buscar por produto, código ou fornecedor", key="hent_busca")
-    if busca.strip():
-        b = busca.lower()
-        movs = [m for m in movs if b in (m.get("produto") or {}).get("nome","").lower()
-                or b in (m.get("produto") or {}).get("codigo_interno","").lower()
-                or b in (m.get("fornecedor") or "").lower()]
+    # --- Filtros por coluna (mesmo padrão de Solicitações) ---
+    head_ratio=[1.3,1.8,1.0,0.8,1.0,1.0,1.4,1.0]
+    fc=st.columns(head_ratio)
+    with fc[0]: f_data=st.date_input("Data",value=(),key="hent_f_data",label_visibility="collapsed")
+    with fc[1]: f_produto=st.text_input("Produto",placeholder="🔍 Produto…",key="hent_f_produto",label_visibility="collapsed")
+    with fc[2]: f_codigo=st.text_input("Código",placeholder="🔍 Código…",key="hent_f_codigo",label_visibility="collapsed")
+    with fc[3]: st.markdown("&nbsp;",unsafe_allow_html=True)
+    with fc[4]: f_tipo=st.selectbox("Tipo",["Todos"]+TIPOS,key="hent_f_tipo",label_visibility="collapsed")
+    with fc[5]: f_nf=st.text_input("NF",placeholder="🔍 NF…",key="hent_f_nf",label_visibility="collapsed")
+    with fc[6]: st.markdown("&nbsp;",unsafe_allow_html=True)
+    with fc[7]: f_exec=st.text_input("Executor",placeholder="🔍 Executor…",key="hent_f_exec",label_visibility="collapsed")
+
+    hc=st.columns(head_ratio)
+    for col,txt in zip(hc,["Data/Hora","Produto","Código","Qtd","Tipo","NF","Obs/CNR","Executor"]):
+        col.markdown(f'<div style="font-size:.68rem;font-weight:700;color:var(--t3);letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid var(--bdr);padding-bottom:.4rem;margin-bottom:.35rem;">{txt}</div>',unsafe_allow_html=True)
+
+    def _passa(m):
+        if len(f_data)==2:
+            d0,d1=f_data
+            dm=datetime.datetime.fromisoformat(m["criado_em"].replace("Z","+00:00")).date()
+            if not (d0<=dm<=d1): return False
+        if f_produto.strip() and f_produto.strip().lower() not in (m.get("produto") or {}).get("nome","").lower(): return False
+        if f_codigo.strip() and f_codigo.strip().lower() not in (m.get("produto") or {}).get("codigo_interno","").lower(): return False
+        if f_tipo!="Todos" and m.get("tipo_entrada")!=f_tipo: return False
+        if f_nf.strip() and f_nf.strip().lower() not in (m.get("numero_nf") or "").lower(): return False
+        if f_exec.strip() and f_exec.strip().lower() not in ((m.get("exe") or {}).get("nick","")).lower(): return False
+        return True
+    movs=[m for m in movs if _passa(m)]
 
     # --- Paginação (mesmo padrão do Inventário) ---
     OPCOES_PP = [10,20,40]
-    filtro_sig = f"{busca}"
+    filtro_sig = f"{f_data}|{f_produto}|{f_codigo}|{f_tipo}|{f_nf}|{f_exec}"
     if st.session_state.get("hent_filtro_sig") != filtro_sig:
         st.session_state["hent_filtro_sig"] = filtro_sig
         st.session_state["hent_pagina"] = 1
