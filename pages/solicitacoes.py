@@ -52,6 +52,30 @@ def _badge_status_compra(status: str) -> str:
             f'{emoji} {esc(status)}</span>')
 
 
+# ── Popups flutuantes (modal real) ────────────────────────────────────────────
+
+_dialog = getattr(st, "dialog", None) or getattr(st, "experimental_dialog", None)
+
+
+@_dialog("⚠️ Atenção")
+def _dialog_avisos(mensagens: list):
+    for m in mensagens:
+        st.error(m)
+    if st.button("Fechar", type="primary", use_container_width=True, key="dlg_aviso_fechar"):
+        st.rerun()
+
+
+@_dialog("🖼️ Foto do Produto")
+def _dialog_foto(nome: str, foto_url: str):
+    st.markdown(f"**{esc(nome)}**")
+    if foto_url:
+        st.image(foto_url, use_container_width=True)
+    else:
+        st.info("Sem foto cadastrada para este produto.")
+    if st.button("Fechar", type="primary", use_container_width=True, key="dlg_foto_fechar"):
+        st.rerun()
+
+
 # ══ TELA USUÁRIO ════════════════════════════════════════════════════════════════
 
 def tela_solicitacoes_usuario():
@@ -227,18 +251,25 @@ def _form_solicitar(u):
         '<div style="font-size:.78rem;font-weight:700;color:var(--t3);'
         'letter-spacing:.05em;text-transform:uppercase;margin:.8rem 0 .2rem;">Itens</div>',
         unsafe_allow_html=True)
-    _ch1, _ch2 = st.columns([3, 1])
+    _ch1, _ch2, _ch3 = st.columns([3, 1, 0.6])
     with _ch1: st.markdown('<div style="font-size:.75rem;color:var(--t3);padding-bottom:.1rem;">Produto</div>', unsafe_allow_html=True)
     with _ch2: st.markdown('<div style="font-size:.75rem;color:var(--t3);padding-bottom:.1rem;">Qtd (unidade secundária)</div>', unsafe_allow_html=True)
+    with _ch3: st.markdown('<div style="font-size:.75rem;color:var(--t3);padding-bottom:.1rem;">Foto</div>', unsafe_allow_html=True)
 
     opts_prod = [_SOL_NENHUM] + list(pm.keys())
     linhas = []
     for i in range(_N_LINHAS_SOL):
-        c_p, c_q = st.columns([3, 1])
+        c_p, c_q, c_f = st.columns([3, 1, 0.6])
         with c_p:
             p_sel = st.selectbox(f"Produto {i+1}", opts_prod, key=f"sol_p{i}", label_visibility="collapsed")
         with c_q:
             q_sel = st.number_input("Qtd", min_value=0.0, value=0.0, step=1.0, key=f"sol_q{i}", label_visibility="collapsed")
+        with c_f:
+            prod_linha = pm.get(p_sel)
+            tem_foto = bool(prod_linha and prod_linha.get("foto_url"))
+            if st.button("📷", key=f"sol_foto_{i}", disabled=not tem_foto, use_container_width=True,
+                         help="Ver foto do produto" if tem_foto else "Sem foto cadastrada"):
+                _dialog_foto(prod_linha["nome"], prod_linha["foto_url"])
         linhas.append((p_sel, q_sel))
 
     if st.button("📨 Enviar Solicitação →", type="primary", use_container_width=True, key="btn_enviar_sol"):
@@ -263,7 +294,7 @@ def _form_solicitar(u):
                 erros.append(f"Saldo insuficiente para {agr['prod']['nome']}. Disponível: {qtd_br(disp)} {un_lbl}.")
 
         if erros:
-            for e in erros: st.error(e)
+            _dialog_avisos(erros)
         else:
             for agr in agregados.values():
                 prod = agr["prod"]
@@ -886,8 +917,6 @@ def _reverter_solicitacao(item_id, tipo: str) -> bool:
 
 
 # ── Popup (modal real) de confirmação de reversão ─────────────────────────────
-
-_dialog = getattr(st, "dialog", None) or getattr(st, "experimental_dialog", None)
 
 
 @_dialog("↩️ Reverter Solicitação")
